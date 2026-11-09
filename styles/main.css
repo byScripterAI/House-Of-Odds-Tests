@@ -1,0 +1,286 @@
+/* ==========================================================================
+   HOUSE OF ODDS — estilos base
+   Paleta y tipografías de todo el juego. menus.css y hud.css (Fases 2 y 5)
+   reutilizan estas variables.
+   ========================================================================== */
+
+/* Tipografías locales (licencia OFL, ver assets/fonts/LICENSE-*.txt) */
+@font-face {
+  font-family: 'Cinzel';
+  src: url('../assets/fonts/cinzel-latin-400-normal.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Cinzel';
+  src: url('../assets/fonts/cinzel-latin-700-normal.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Cormorant Garamond';
+  src: url('../assets/fonts/cormorant-garamond-latin-400-normal.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Cormorant Garamond';
+  src: url('../assets/fonts/cormorant-garamond-latin-600-normal.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Cormorant Garamond';
+  src: url('../assets/fonts/cormorant-garamond-latin-400-italic.woff2') format('woff2');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+
+:root {
+  /* Mismos valores que PALETTE en src/config.js */
+  --hoo-black: #050304;
+  --hoo-carbon: #1b1a1c;
+  --hoo-crimson: #9e1b32;
+  --hoo-gold: #d4af37;
+  --hoo-warm-white: #f5ead7;
+
+  /* Variantes derivadas */
+  --hoo-gold-light: #f3dc8a;
+  --hoo-gold-dark: #8f6f1d;
+  --hoo-crimson-bright: #c42240;
+  --hoo-panel: rgba(12, 9, 10, 0.86);
+
+  --font-display: 'Cinzel', 'Trajan Pro', 'Didot', 'Georgia', serif;
+  --font-body: 'Cormorant Garamond', 'Garamond', 'Georgia', serif;
+  --font-mono: ui-monospace, 'Cascadia Mono', 'Consolas', 'Menlo', monospace;
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--hoo-black);
+  color: var(--hoo-warm-white);
+  font-family: var(--font-body);
+  font-size: 18px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#game-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  outline: none;
+}
+
+/* La capa de UI no captura el ratón salvo en los elementos que lo pidan. */
+#ui-root {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* ---- Pantalla de arranque ------------------------------------------------ */
+
+.boot {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.6rem;
+  background:
+    radial-gradient(ellipse at 50% 42%, rgba(158, 27, 50, 0.22), transparent 60%),
+    radial-gradient(ellipse at 50% 100%, rgba(212, 175, 55, 0.08), transparent 55%),
+    var(--hoo-black);
+  transition: opacity 0.7s var(--ease-out), visibility 0s linear 0.7s;
+}
+
+.boot--hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.logo {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(2rem, 7.5vw, 5.2rem);
+  letter-spacing: 0.16em;
+  text-align: center;
+  background: linear-gradient(180deg, var(--hoo-gold-light) 0%, var(--hoo-gold) 48%, var(--hoo-gold-dark) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  filter: drop-shadow(0 0 24px rgba(212, 175, 55, 0.25));
+}
+
+.logo__of {
+  font-size: 0.5em;
+  letter-spacing: 0.3em;
+  -webkit-text-fill-color: var(--hoo-crimson-bright);
+  vertical-align: 0.18em;
+}
+
+.boot__bar {
+  width: min(320px, 60vw);
+  height: 2px;
+  background: rgba(212, 175, 55, 0.18);
+  overflow: hidden;
+}
+
+.boot__fill {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, var(--hoo-gold-dark), var(--hoo-gold-light));
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 0.35s var(--ease-out);
+}
+
+.boot__message {
+  margin: 0;
+  min-height: 1.5em;
+  max-width: min(560px, 86vw);
+  text-align: center;
+  font-style: italic;
+  letter-spacing: 0.08em;
+  color: rgba(245, 234, 215, 0.7);
+}
+
+.boot__message--error {
+  color: var(--hoo-gold-light);
+  font-style: normal;
+}
+
+.noscript {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: grid;
+  place-items: center;
+  background: var(--hoo-black);
+  font-family: var(--font-display);
+  letter-spacing: 0.1em;
+  text-align: center;
+  padding: 2rem;
+}
+
+/* ---- Error fatal --------------------------------------------------------- */
+
+.fatal {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  background: rgba(5, 3, 4, 0.96);
+  pointer-events: auto;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.fatal__card {
+  max-width: 620px;
+  padding: 2rem 2.2rem;
+  background: var(--hoo-panel);
+  border: 1px solid var(--hoo-crimson);
+  box-shadow: 0 0 60px rgba(158, 27, 50, 0.25);
+}
+
+.fatal__title {
+  margin: 0 0 0.8rem;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.35rem;
+  letter-spacing: 0.1em;
+  color: var(--hoo-gold);
+}
+
+.fatal__text {
+  margin: 0 0 1rem;
+  line-height: 1.45;
+  font-size: 1.1rem;
+}
+
+.fatal__details summary {
+  cursor: pointer;
+  color: rgba(245, 234, 215, 0.6);
+  font-size: 0.95rem;
+}
+
+.fatal__details pre {
+  margin: 0.6rem 0 0;
+  max-height: 200px;
+  overflow: auto;
+  padding: 0.7rem;
+  background: rgba(0, 0, 0, 0.5);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ---- Overlay de depuración (F3) y rótulo de fase ------------------------- */
+
+.debug-overlay {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  margin: 0;
+  padding: 0.6rem 0.8rem;
+  background: rgba(5, 3, 4, 0.72);
+  border-left: 2px solid var(--hoo-gold);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--hoo-warm-white);
+  white-space: pre;
+  pointer-events: none;
+}
+
+.debug-overlay[hidden] {
+  display: none;
+}
+
+.phase-badge {
+  position: fixed;
+  left: 16px;
+  bottom: 14px;
+  font-family: var(--font-display);
+  font-size: 0.72rem;
+  letter-spacing: 0.22em;
+  color: rgba(212, 175, 55, 0.7);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}

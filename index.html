@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#050304">
+  <meta name="description" content="HOUSE OF ODDS — un casino arcade 3D.">
+  <title>HOUSE OF ODDS</title>
+  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+  <link rel="stylesheet" href="styles/main.css">
+  <link rel="stylesheet" href="styles/menus.css">
+  <link rel="stylesheet" href="styles/hud.css">
+
+  <!-- Three.js se sirve desde /vendor (sin CDN): el juego funciona sin conexión. -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three/three.module.js"
+      }
+    }
+  </script>
+</head>
+<body>
+  <canvas id="game-canvas" tabindex="-1"></canvas>
+  <div id="ui-root"></div>
+
+  <div id="boot-screen" class="boot" role="status" aria-live="polite">
+    <h1 class="logo">HOUSE <span class="logo__of">OF</span> ODDS</h1>
+    <div class="boot__bar" aria-hidden="true"><div id="boot-fill" class="boot__fill"></div></div>
+    <p id="boot-message" class="boot__message">Cargando…</p>
+  </div>
+
+  <noscript>
+    <div class="noscript">HOUSE OF ODDS necesita JavaScript activado para funcionar.</div>
+  </noscript>
+
+  <!-- Guardia de arranque (script clásico, independiente de los módulos):
+       si los módulos no llegan a ejecutarse, explica por qué en vez de quedarse en «Cargando…». -->
+  <script>
+    (function () {
+      function fail(message) {
+        if (window.__HOO_BOOTED || window.__HOO_FATAL) return;
+        var el = document.getElementById('boot-message');
+        if (!el) return;
+        el.textContent = message;
+        el.classList.add('boot__message--error');
+      }
+      if (location.protocol === 'file:') {
+        fail('Este juego necesita un servidor local. Ejecuta «node server.mjs» y abre http://127.0.0.1:8080');
+        return;
+      }
+      window.addEventListener('error', function (event) {
+        if (event.target && event.target.tagName === 'SCRIPT') {
+          fail('No se pudo cargar el juego. ¿Está activo el servidor local? Revisa la consola (F12).');
+        }
+      }, true);
+      setTimeout(function () {
+        fail('El juego tarda demasiado en iniciar. Revisa la consola (F12) y usa un navegador moderno.');
+      }, 10000);
+    })();
+  </script>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

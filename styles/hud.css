@@ -1,0 +1,101 @@
+/* ==========================================================================
+   HOUSE OF ODDS — HUD (interfaz durante el juego)
+   ========================================================================== */
+
+.hud { position: absolute; inset: 0; z-index: 20; transition: opacity 0.4s var(--ease-out); }
+.hud.is-hidden { opacity: 0; }
+
+.hud__stats {
+  position: absolute;
+  top: 18px;
+  right: 22px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.3rem;
+  padding: 0.7rem 1.1rem;
+  background: linear-gradient(270deg, rgba(5, 3, 4, 0.78), rgba(5, 3, 4, 0.2));
+  border-right: 2px solid var(--hoo-gold);
+}
+.hud__marks { position: relative; display: flex; align-items: center; gap: 0.6rem; color: var(--hoo-gold); }
+.hud__marks-value { font-family: var(--font-display); font-weight: 700; font-size: 2rem; letter-spacing: 0.06em; color: var(--hoo-gold-light); text-shadow: 0 0 14px rgba(212, 175, 55, 0.4); font-variant-numeric: tabular-nums; }
+.hud__label { font-family: var(--font-display); font-size: 0.7rem; letter-spacing: 0.3em; color: rgba(245, 234, 215, 0.6); }
+.hud__icon { width: 26px; height: 26px; display: inline-flex; }
+.hud__icon svg { width: 100%; height: 100%; }
+.hud__icon--small { width: 15px; height: 15px; color: var(--hoo-crimson-bright); }
+.hud__prestige { display: flex; align-items: center; gap: 0.5rem; }
+.hud__prestige-value { font-family: var(--font-display); font-size: 0.95rem; color: var(--hoo-warm-white); min-width: 2ch; text-align: right; }
+.hud__pop { position: absolute; right: 0; top: 100%; font-family: var(--font-display); font-weight: 700; font-size: 1.15rem; color: #fff3b0; text-shadow: 0 0 10px var(--hoo-gold); animation: hud-pop 1.6s var(--ease-out) forwards; pointer-events: none; }
+@keyframes hud-pop { 0% { opacity: 0; transform: translateY(-6px) scale(0.8); } 15% { opacity: 1; transform: none; } 100% { opacity: 0; transform: translateY(26px); } }
+
+.hud__toasts { position: absolute; top: 18px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 0.5rem; width: min(480px, 90vw); }
+.toast { width: 100%; padding: 0.65rem 1.1rem; text-align: center; background: rgba(8, 5, 6, 0.9); border: 1px solid rgba(212, 175, 55, 0.5); border-top: 2px solid var(--hoo-gold); opacity: 0; transform: translateY(-12px); transition: opacity 0.4s var(--ease-out), transform 0.4s var(--ease-out); }
+.toast.is-in { opacity: 1; transform: none; }
+.toast--objective { border-top-color: var(--hoo-crimson-bright); }
+.toast--error { border-color: var(--hoo-crimson-bright); }
+.toast__title { font-family: var(--font-display); font-size: 0.85rem; letter-spacing: 0.22em; color: var(--hoo-gold-light); }
+.toast__text { margin-top: 0.15rem; font-size: 1rem; color: rgba(245, 234, 215, 0.8); }
+
+.hud__crosshair { position: absolute; left: 50%; top: 50%; width: 5px; height: 5px; margin: -2.5px 0 0 -2.5px; border-radius: 50%; background: rgba(245, 234, 215, 0.7); box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5); opacity: 0; transition: opacity 0.3s; }
+.hud__crosshair.is-on { opacity: 1; }
+
+.hud__prompt { position: absolute; left: 50%; bottom: 17%; transform: translate(-50%, 8px); display: flex; align-items: center; gap: 0.7rem; padding: 0.55rem 1.2rem; background: rgba(5, 3, 4, 0.8); border: 1px solid rgba(212, 175, 55, 0.5); font-size: 1.15rem; letter-spacing: 0.06em; opacity: 0; transition: opacity 0.25s, transform 0.25s var(--ease-out); white-space: nowrap; }
+.hud__prompt.is-on { opacity: 1; transform: translate(-50%, 0); }
+.hud__prompt kbd { display: inline-grid; place-items: center; min-width: 1.7rem; height: 1.7rem; padding: 0 0.3rem; font-family: var(--font-display); font-weight: 700; font-size: 0.9rem; color: #1a1205; background: linear-gradient(180deg, var(--hoo-gold-light), var(--hoo-gold)); border-radius: 3px; box-shadow: 0 2px 0 var(--hoo-gold-dark); }
+
+.hud__hint { position: absolute; left: 50%; bottom: 6%; transform: translateX(-50%); display: flex; gap: 2rem; font-family: var(--font-display); font-size: 0.8rem; letter-spacing: 0.2em; color: rgba(245, 234, 215, 0.8); text-shadow: 0 1px 6px #000; opacity: 0; transition: opacity 0.3s; }
+.hud__hint.is-on { opacity: 1; }
+
+.hud__lock { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 1rem 2.2rem; font-family: var(--font-display); letter-spacing: 0.3em; font-size: 1.05rem; color: var(--hoo-gold-light); background: rgba(5, 3, 4, 0.88); border: 1px solid var(--hoo-gold); opacity: 0; pointer-events: none; transition: opacity 0.3s; animation: lock-pulse 1.8s ease-in-out infinite; }
+.hud__lock.is-on { opacity: 1; }
+@keyframes lock-pulse { 50% { box-shadow: 0 0 22px rgba(212, 175, 55, 0.35); } }
+
+.hud__controls { position: absolute; left: 18px; bottom: 14px; font-size: 0.95rem; letter-spacing: 0.08em; color: rgba(245, 234, 215, 0.55); text-shadow: 0 1px 4px #000; opacity: 0; transition: opacity 0.3s; }
+.hud__controls.is-on { opacity: 1; }
+
+/* ---------- efectos de pantalla ---------- */
+.fx-canvas { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 40; pointer-events: none; }
+.fx-bigtext {
+  position: absolute; left: 50%; top: 22%; z-index: 41; pointer-events: none; white-space: nowrap;
+  font-family: var(--font-display); font-weight: 700; letter-spacing: 0.1em;
+  font-size: calc(clamp(2rem, 7vw, 6rem) * var(--fx-size, 1));
+  color: var(--fx-color, #fff3b0);
+  text-shadow: 0 0 18px var(--fx-glow, #d4af37), 0 0 50px var(--fx-glow, #d4af37), 0 4px 0 rgba(0, 0, 0, 0.5);
+  transform: translate(-50%, -50%) scale(0.2); opacity: 0;
+  animation: fx-pop 1800ms cubic-bezier(0.2, 1.4, 0.4, 1) forwards;
+}
+@keyframes fx-pop {
+  0% { transform: translate(-50%, -50%) scale(0.2) rotate(-6deg); opacity: 0; }
+  14% { transform: translate(-50%, -50%) scale(1.25) rotate(2deg); opacity: 1; }
+  24% { transform: translate(-50%, -50%) scale(1) rotate(0); }
+  78% { transform: translate(-50%, -58%) scale(1.04); opacity: 1; }
+  100% { transform: translate(-50%, -80%) scale(1.1); opacity: 0; }
+}
+.hud__marks-value.is-bump { animation: marks-bump 0.35s cubic-bezier(0.3, 1.8, 0.5, 1); }
+@keyframes marks-bump { 0% { transform: scale(1); } 35% { transform: scale(1.35); color: #fff; } 100% { transform: scale(1); } }
+
+/* ---------- objetivo y tutorial ---------- */
+.hud__objective, .hud__tutorial {
+  position: absolute; padding: 0.7rem 1rem; background: linear-gradient(270deg, rgba(5, 3, 4, 0.8), rgba(5, 3, 4, 0.35));
+  opacity: 0; transform: translateX(14px); transition: opacity 0.35s, transform 0.35s var(--ease-out); pointer-events: none;
+}
+.hud__objective.is-on, .hud__tutorial.is-on { opacity: 1; transform: none; }
+.mode-machine .hud__objective, .mode-machine .hud__tutorial { opacity: 0; transform: translateX(14px); }
+.hud__objective { top: 128px; right: 22px; width: min(300px, 40vw); border-right: 2px solid var(--hoo-crimson-bright); text-align: right; }
+.hud__tutorial { top: 18px; left: 22px; width: min(340px, 42vw); border-left: 2px solid #58e6ff; background: linear-gradient(90deg, rgba(5, 3, 4, 0.85), rgba(5, 3, 4, 0.35)); transform: translateX(-14px); }
+.hud__panel-title { font-family: var(--font-display); font-size: 0.66rem; letter-spacing: 0.3em; color: rgba(245, 234, 215, 0.55); }
+.hud__tutorial .hud__panel-title { color: #58e6ff; }
+.hud__objective-name { margin-top: 0.2rem; font-family: var(--font-display); font-size: 0.95rem; letter-spacing: 0.08em; color: var(--hoo-gold-light); }
+.hud__objective-desc { font-size: 0.95rem; color: rgba(245, 234, 215, 0.75); line-height: 1.2; }
+.hud__objective-count { margin-top: 0.3rem; font-size: 0.85rem; letter-spacing: 0.08em; color: rgba(245, 234, 215, 0.6); }
+.hud__bar { height: 6px; margin-top: 0.4rem; background: rgba(245, 234, 215, 0.12); border-radius: 3px; overflow: hidden; }
+.hud__bar-fill { height: 100%; background: linear-gradient(90deg, var(--hoo-crimson-bright), var(--hoo-gold)); box-shadow: 0 0 10px var(--hoo-gold); transition: width 0.5s var(--ease-out); }
+.hud__tutorial-text { margin-top: 0.25rem; font-size: 1.1rem; line-height: 1.25; color: var(--hoo-warm-white); }
+.hud__dots { display: flex; gap: 5px; margin-top: 0.5rem; }
+.hud__dots span { width: 18px; height: 4px; background: rgba(245, 234, 215, 0.18); border-radius: 2px; }
+.hud__dots .is-done { background: #58e6ff; }
+.hud__dots .is-now { background: var(--hoo-gold); animation: lock-pulse 1.2s infinite; }
+
+/* En la máquina los avisos van al lateral: nunca tapan los rodillos. */
+.mode-machine .hud__toasts { top: auto; bottom: 90px; left: 22px; transform: none; align-items: flex-start; width: min(320px, 34vw); }
+.mode-machine .toast { text-align: left; }
