@@ -11,9 +11,10 @@
  * ES. Este servidor fija los tipos correctos y solo escucha en 127.0.0.1.
  */
 import { createServer } from 'node:http';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { buildManifest, scanAudio } from './scripts/audio-manifest.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('.', import.meta.url)));
 
@@ -65,14 +66,10 @@ export function createStaticServer({ root = ROOT } = {}) {
     }
     if (pathname.includes('\0')) return send(400, 'Petición incorrecta');
 
-    // Lista dinámica de los .mp3 presentes en assets/audio (evita peticiones 404 por cada sonido ausente).
-    if (pathname === '/assets/audio/_list.json') {
-      try {
-        const names = (await readdir(resolve(base, 'assets/audio'))).filter((n) => n.toLowerCase().endsWith('.mp3'));
-        return send(200, JSON.stringify(names), { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
-      } catch {
-        return send(200, '[]', { 'Content-Type': 'application/json; charset=utf-8' });
-      }
+    // Manifiesto de audio generado al vuelo (en un alojamiento estático lo crea `npm run audio`).
+    if (pathname === '/assets/audio/manifest.json') {
+      const found = await scanAudio(base);
+      return send(200, JSON.stringify(buildManifest(found)), { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
     }
 
     let filePath = resolve(base, `.${pathname}`);

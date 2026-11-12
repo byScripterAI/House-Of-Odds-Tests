@@ -4,17 +4,35 @@
  * confirmación. Todo el DOM del juego se construye con estas funciones.
  */
 
+import { t } from '../i18n/index.js';
+
 let audioHook = null;
 export function setUiAudio(audio) {
   audioHook = audio;
 }
 export const uiSfx = (name) => audioHook?.sfx(name);
 
+/**
+ * Crea un elemento. `text` puede ser un string o una FUNCIÓN que devuelve el
+ * texto: en ese caso el elemento se marca como traducible y se vuelve a pintar
+ * al cambiar de idioma (ver `retranslate`).
+ */
 export function el(tag, className = '', text = null) {
   const node = document.createElement(tag);
   if (className) node.className = className;
-  if (text !== null) node.textContent = text;
+  if (typeof text === 'function') {
+    node._tr = text;
+    node.setAttribute('data-tr', '');
+    node.textContent = text();
+  } else if (text !== null) {
+    node.textContent = text;
+  }
   return node;
+}
+
+/** Vuelve a pintar todos los textos traducibles bajo `root` (cambio de idioma instantáneo). */
+export function retranslate(root = document) {
+  for (const node of root.querySelectorAll('[data-tr]')) node.textContent = node._tr();
 }
 
 export function button(label, onClick, { cls = '', disabled = false } = {}) {
@@ -82,7 +100,7 @@ export function toggle(label, value, onChange) {
   sw.setAttribute('role', 'switch');
   const paint = (v) => {
     sw.setAttribute('aria-checked', String(v));
-    sw.textContent = v ? 'SÍ' : 'NO';
+    sw.textContent = v ? t('common.yes') : t('common.no');
   };
   let state = value;
   paint(state);
@@ -96,10 +114,33 @@ export function toggle(label, value, onChange) {
   return row;
 }
 
+/** Selector de idioma: una rejilla con el nombre de cada idioma en su propio idioma. */
+export function languagePicker(languages, value, onPick) {
+  const grid = el('div', 'lang-grid');
+  const buttons = languages.map((l) => {
+    const b = el('button', 'lang-btn', l.native);
+    b.type = 'button';
+    b.lang = l.code;
+    b.addEventListener('mouseenter', () => uiSfx('hover'));
+    b.addEventListener('click', () => {
+      uiSfx('click');
+      onPick(l.code);
+    });
+    grid.append(b);
+    return [l.code, b];
+  });
+  const mark = (code) => buttons.forEach(([c, b]) => {
+    b.classList.toggle('is-active', c === code);
+    b.setAttribute('aria-pressed', String(c === code));
+  });
+  mark(value);
+  return grid;
+}
+
 export function segmented(label, options, value, onChange) {
-  const row = el('div', 'set-row');
+  const row = el('div', options.length > 3 ? 'set-row set-row--stack' : 'set-row');
   const name = el('span', 'set-row__label', label);
-  const group = el('div', 'segmented');
+  const group = el('div', options.length > 3 ? 'segmented segmented--wide' : 'segmented');
   const buttons = options.map((opt) => {
     const b = el('button', 'segmented__btn', opt.label);
     b.type = 'button';
@@ -118,7 +159,7 @@ export function segmented(label, options, value, onChange) {
 }
 
 /** Diálogo de confirmación modal. Resuelve true/false; ESC cancela. */
-export function confirmDialog(root, { title, text, confirm = 'ACEPTAR', cancel = 'CANCELAR' }) {
+export function confirmDialog(root, { title, text, confirm = t('common.accept'), cancel = t('common.cancel') }) {
   return new Promise((resolve) => {
     const screen = new Screen('screen--dialog');
     const card = el('div', 'panel dialog');

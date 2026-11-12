@@ -1,0 +1,4 @@
+Pon aquí las voces de los diálogos: <identificador>.mp3 (p. ej. m01_intro__v1.mp3).
+La lista completa de líneas, personajes y nombres de archivo está en docs/DIALOGUE_AUDIO.md.
+Voz distinta por idioma: subcarpetas es/, en/, de/, fr/, pt/, zh/ con los mismos nombres.
+Después ejecuta "npm run audio" si subes el juego a un alojamiento estático (Vercel).

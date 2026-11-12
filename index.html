@@ -1,22 +1,25 @@
 <!doctype html>
-<html lang="es">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#050304">
-  <meta name="description" content="HOUSE OF ODDS — un casino arcade 3D.">
+  <meta name="description" content="HOUSE OF ODDS — a 3D casino arcade adventure.">
   <title>HOUSE OF ODDS</title>
   <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
   <link rel="stylesheet" href="styles/main.css">
   <link rel="stylesheet" href="styles/menus.css">
   <link rel="stylesheet" href="styles/hud.css">
+  <link rel="stylesheet" href="styles/story.css">
+  <link rel="stylesheet" href="styles/ui.css">
 
   <!-- Three.js se sirve desde /vendor (sin CDN): el juego funciona sin conexión. -->
   <script type="importmap">
     {
       "imports": {
-        "three": "./vendor/three/three.module.js"
+        "three": "./vendor/three/three.module.js",
+        "three/addons/": "./vendor/three/addons/"
       }
     }
   </script>
@@ -26,38 +29,77 @@
   <div id="ui-root"></div>
 
   <div id="boot-screen" class="boot" role="status" aria-live="polite">
-    <h1 class="logo">HOUSE <span class="logo__of">OF</span> ODDS</h1>
-    <div class="boot__bar" aria-hidden="true"><div id="boot-fill" class="boot__fill"></div></div>
-    <p id="boot-message" class="boot__message">Cargando…</p>
+    <div class="boot__rays" aria-hidden="true"></div>
+    <div class="boot__frame" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <div class="boot__center">
+      <div class="boot__kicker">VANTA INTERACTIVE</div>
+      <h1 class="boot__logo">HOUSE<i>OF</i><b>ODDS</b><span class="boot__beta">BETA</span></h1>
+      <div class="boot__progress">
+        <div class="boot__row">
+          <p id="boot-message" class="boot__message">Loading…</p>
+          <span id="boot-pct" class="boot__pct">0<small>%</small></span>
+        </div>
+        <div class="boot__bar" aria-hidden="true"><div id="boot-fill" class="boot__fill"></div><div id="boot-head" class="boot__head"></div></div>
+        <ol id="boot-steps" class="boot__steps" aria-hidden="true"><li></li><li></li><li></li><li></li><li></li></ol>
+      </div>
+    </div>
+    <p id="boot-tip" class="boot__tip" aria-hidden="true"></p>
+    <div class="boot__foot" aria-hidden="true"><span id="boot-version">v0.6.2 · BETA</span><span class="boot__chip"></span></div>
   </div>
 
   <noscript>
-    <div class="noscript">HOUSE OF ODDS necesita JavaScript activado para funcionar.</div>
+    <div class="noscript">
+      HOUSE OF ODDS needs JavaScript to be enabled.<br>
+      HOUSE OF ODDS necesita JavaScript activado.<br>
+      HOUSE OF ODDS benötigt aktiviertes JavaScript.<br>
+      HOUSE OF ODDS nécessite JavaScript.<br>
+      O HOUSE OF ODDS precisa de JavaScript ativado.<br>
+      HOUSE OF ODDS 需要启用 JavaScript。
+    </div>
   </noscript>
 
   <!-- Guardia de arranque (script clásico, independiente de los módulos):
-       si los módulos no llegan a ejecutarse, explica por qué en vez de quedarse en «Cargando…». -->
+       si los módulos no llegan a ejecutarse, explica por qué en vez de quedarse en «Loading…».
+       Usa el mismo idioma que el juego (el guardado, o el del navegador; inglés si no es uno de los 6). -->
   <script>
     (function () {
+      var T = {
+        en: ['Loading…', 'This game needs a local server. Run "node server.mjs" and open http://127.0.0.1:8080', 'The game could not be loaded. Is the server running? Check the console (F12).', 'The game is taking too long to start. Check the console (F12) and use a modern browser.'],
+        es: ['Cargando…', 'Este juego necesita un servidor local. Ejecuta «node server.mjs» y abre http://127.0.0.1:8080', 'No se pudo cargar el juego. ¿Está activo el servidor? Revisa la consola (F12).', 'El juego tarda demasiado en iniciar. Revisa la consola (F12) y usa un navegador moderno.'],
+        de: ['Wird geladen …', 'Dieses Spiel benötigt einen lokalen Server. Führe „node server.mjs“ aus und öffne http://127.0.0.1:8080', 'Das Spiel konnte nicht geladen werden. Läuft der Server? Prüfe die Konsole (F12).', 'Das Spiel startet zu langsam. Prüfe die Konsole (F12) und nutze einen modernen Browser.'],
+        fr: ['Chargement…', 'Ce jeu nécessite un serveur local. Exécutez « node server.mjs » et ouvrez http://127.0.0.1:8080', 'Le jeu n’a pas pu être chargé. Le serveur est-il actif ? Consultez la console (F12).', 'Le jeu met trop de temps à démarrer. Consultez la console (F12) et utilisez un navigateur récent.'],
+        pt: ['A carregar…', 'Este jogo precisa de um servidor local. Executa «node server.mjs» e abre http://127.0.0.1:8080', 'Não foi possível carregar o jogo. O servidor está ativo? Consulta a consola (F12).', 'O jogo demora demasiado a iniciar. Consulta a consola (F12) e usa um navegador moderno.'],
+        zh: ['加载中…', '此游戏需要本地服务器。请运行 “node server.mjs” 并打开 http://127.0.0.1:8080', '游戏无法加载。服务器是否已启动？请查看控制台（F12）。', '游戏启动时间过长。请查看控制台（F12），并使用现代浏览器。']
+      };
+      var lang = 'en';
+      try {
+        var saved = localStorage.getItem('houseofodds.language');
+        var base = (saved || (navigator.languages && navigator.languages[0]) || navigator.language || 'en').toLowerCase().split(/[-_]/)[0];
+        if (T[base]) lang = base;
+      } catch (e) {
+        var b0 = ((navigator.languages && navigator.languages[0]) || navigator.language || 'en').toLowerCase().split(/[-_]/)[0];
+        if (T[b0]) lang = b0;
+      }
+      var msg = T[lang];
+      var boot = document.getElementById('boot-message');
+      if (boot) boot.textContent = msg[0];
+      document.documentElement.lang = lang;
       function fail(message) {
         if (window.__HOO_BOOTED || window.__HOO_FATAL) return;
+        if (message === msg[3] && window.__HOO_LOADING) return; // los módulos ya arrancaron: está cargando recursos
         var el = document.getElementById('boot-message');
         if (!el) return;
         el.textContent = message;
         el.classList.add('boot__message--error');
       }
       if (location.protocol === 'file:') {
-        fail('Este juego necesita un servidor local. Ejecuta «node server.mjs» y abre http://127.0.0.1:8080');
+        fail(msg[1]);
         return;
       }
       window.addEventListener('error', function (event) {
-        if (event.target && event.target.tagName === 'SCRIPT') {
-          fail('No se pudo cargar el juego. ¿Está activo el servidor local? Revisa la consola (F12).');
-        }
+        if (event.target && event.target.tagName === 'SCRIPT') fail(msg[2]);
       }, true);
-      setTimeout(function () {
-        fail('El juego tarda demasiado en iniciar. Revisa la consola (F12) y usa un navegador moderno.');
-      }, 10000);
+      setTimeout(function () { fail(msg[3]); }, 10000);
     })();
   </script>
 

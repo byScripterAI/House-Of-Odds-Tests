@@ -1,4 +1,5 @@
 import { WebGLUnavailableError } from '../core/errors.js';
+import { t } from '../i18n/index.js';
 
 /**
  * Pantalla de error irrecuperable. Construye el DOM con textContent
@@ -11,10 +12,8 @@ export function showFatalError(error) {
   document.querySelector('.fatal')?.remove();
 
   const isWebGL = error instanceof WebGLUnavailableError;
-  const title = isWebGL ? 'Gráficos 3D no disponibles' : 'HOUSE OF ODDS no ha podido continuar';
-  const text = isWebGL
-    ? 'Tu navegador o tu equipo no permiten WebGL, que el juego necesita. Prueba con una versión reciente de Chrome, Edge o Firefox, activa la aceleración por hardware en los ajustes del navegador y actualiza los controladores de la tarjeta gráfica.'
-    : 'Se ha producido un error inesperado. Recarga la página; si se repite, abre la consola del navegador (F12) y revisa el detalle técnico de abajo.';
+  const title = t(isWebGL ? 'fatal.webgl.title' : 'fatal.generic.title');
+  const text = t(isWebGL ? 'fatal.webgl.text' : 'fatal.generic.text');
 
   const root = document.createElement('section');
   root.className = 'fatal';
@@ -34,9 +33,9 @@ export function showFatalError(error) {
   const details = document.createElement('details');
   details.className = 'fatal__details';
   const summary = document.createElement('summary');
-  summary.textContent = 'Detalle técnico';
+  summary.textContent = t('fatal.details');
   const pre = document.createElement('pre');
-  const cause = error?.cause ? `\nCausa: ${error.cause?.message ?? error.cause}` : '';
+  const cause = error?.cause ? `\n${t('fatal.cause')}: ${error.cause?.message ?? error.cause}` : '';
   pre.textContent = `${error?.name ?? 'Error'}: ${error?.message ?? String(error)}${cause}`;
   details.append(summary, pre);
 

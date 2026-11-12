@@ -106,10 +106,12 @@ test('sin LocalStorage (null) funciona en memoria', () => {
 });
 
 test('sanitizeSettings limita rangos, tipos y calidades desconocidas', () => {
-  const s = sanitizeSettings({ graphics: { quality: 'ultra', renderScale: 9, shadows: 'sí' }, audio: { master: -3, music: 'x', sfx: 0.5 }, controls: { mouseSensitivity: 100 } });
+  const s = sanitizeSettings({ graphics: { quality: 'extreme', renderScale: 9, shadows: 'sí' }, audio: { master: -3, music: 'x', sfx: 0.5 }, controls: { mouseSensitivity: 100 } });
   assert.equal(s.graphics.quality, 'medium');
   assert.equal(s.graphics.renderScale, 1);
   assert.equal(s.graphics.shadows, true);
+  assert.equal(sanitizeSettings({ graphics: { quality: 'ultra' } }).graphics.quality, 'ultra');
+  assert.equal(sanitizeSettings({ graphics: { quality: 'veryLow' } }).graphics.quality, 'veryLow');
   assert.equal(s.audio.master, 0);
   assert.equal(s.audio.music, DEFAULT_SETTINGS.audio.music);
   assert.equal(s.audio.sfx, 0.5);

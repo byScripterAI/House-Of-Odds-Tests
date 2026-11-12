@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { PALETTE, resolveGraphics } from '../config.js';
+import { PostFX } from '../gfx/postfx.js';
 import { WebGLUnavailableError } from './errors.js';
 
 /**
@@ -29,6 +30,7 @@ export class GameRenderer {
   #canvas;
   #bus;
   #contextAntialias;
+  #post;
 
   constructor({ canvas, graphics, bus = null }) {
     this.#canvas = canvas;
@@ -55,11 +57,13 @@ export class GameRenderer {
     // PCFSoftShadowMap está retirado desde three r186; PCFShadowMap es el tipo suave estándar.
     this.webgl.shadowMap.type = THREE.PCFShadowMap;
     this.webgl.shadowMap.enabled = this.settings.shadows;
+    this.#post = new PostFX(this.webgl);
 
     canvas.addEventListener('webglcontextlost', this.#onContextLost);
     canvas.addEventListener('webglcontextrestored', this.#onContextRestored);
     window.addEventListener('resize', this.#onResize);
 
+    this.#post.configure(this.settings.post, { antialias: this.#contextAntialias });
     this.resize();
   }
 
@@ -67,6 +71,7 @@ export class GameRenderer {
   apply(graphics) {
     this.settings = resolveGraphics(graphics);
     this.webgl.shadowMap.enabled = this.settings.shadows;
+    this.#post.configure(this.settings.post, { antialias: this.#contextAntialias });
     this.resize();
     const antialiasNeedsRestart = this.settings.antialias !== this.#contextAntialias;
     this.#bus?.emit('graphics:changed', { settings: this.settings, antialiasNeedsRestart });
@@ -82,12 +87,18 @@ export class GameRenderer {
     this.webgl.setPixelRatio(pixelRatio);
     this.webgl.setSize(width, height, false); // el tamaño CSS lo fija main.css
     this.size = { width, height, aspect: width / height, pixelRatio };
+    this.#post.setSize(width, height, pixelRatio);
     this.#bus?.emit('renderer:resize', this.size);
   }
 
-  render(scene, camera) {
+  render(scene, camera, dt = 0.016) {
     if (this.contextLost) return;
-    this.webgl.render(scene, camera);
+    if (!this.#post.render(scene, camera, dt)) this.webgl.render(scene, camera);
+  }
+
+  /** Post-proceso (bloom/AO/SMAA): lo usa la FX para pulsar el bloom en los premios. */
+  get post() {
+    return this.#post;
   }
 
   get info() {
@@ -102,6 +113,7 @@ export class GameRenderer {
     this.#canvas.removeEventListener('webglcontextlost', this.#onContextLost);
     this.#canvas.removeEventListener('webglcontextrestored', this.#onContextRestored);
     window.removeEventListener('resize', this.#onResize);
+    this.#post.dispose();
     this.webgl.dispose();
   }
 

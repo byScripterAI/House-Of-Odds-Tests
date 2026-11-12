@@ -1,22 +1,63 @@
 import { Game } from './core/game.js';
+import { GAME } from './config.js';
+import { i18n, t } from './i18n/index.js';
 import { App } from './app.js';
 import { SaveManager } from './save/save-manager.js';
 import { showFatalError } from './ui/fatal-error.js';
 import { DebugOverlay } from './ui/debug-overlay.js';
+import { loadCharacters, loadCustomers } from './entities/character-assets.js';
+import { detectQuality } from './core/hardware.js';
+import { loadProps } from './world/props/assets.js';
+import { loadModels } from './world/props/models.js';
+import { loadNeonFont } from './world/neon.js';
 
 /** Punto de entrada. Solo cablea módulos; no contiene lógica de juego. */
 
 const bootScreen = document.getElementById('boot-screen');
 const bootFill = document.getElementById('boot-fill');
+const bootHead = document.getElementById('boot-head');
+const bootPct = document.getElementById('boot-pct');
+const bootSteps = [...(document.getElementById('boot-steps')?.children ?? [])];
+const bootTip = document.getElementById('boot-tip');
+let shownFraction = 0;
+
+/** Barra, porcentaje y pasos (rombos) de la pantalla de carga. Nunca retrocede. */
+function setProgress(fraction) {
+  shownFraction = Math.max(shownFraction, Math.min(1, fraction));
+  const f = shownFraction;
+  bootFill.style.transform = `scaleX(${f})`;
+  if (bootHead) bootHead.style.left = `${f * 100}%`;
+  if (bootPct) bootPct.firstChild.textContent = String(Math.round(f * 100));
+  bootSteps.forEach((li, i) => li.classList.toggle('is-on', f >= (i + 0.5) / bootSteps.length - 0.06));
+}
+
+/** Consejos que van rotando mientras carga. */
+function startTips() {
+  if (!bootTip) return () => {};
+  const tips = [1, 2, 3, 4, 5].map((n) => t(`boot.tip.${n}`)).filter((x) => !x.startsWith('boot.tip'));
+  if (!tips.length) return () => {};
+  let i = Math.floor(Math.random() * tips.length);
+  const show = () => {
+    bootTip.classList.remove('is-in');
+    setTimeout(() => {
+      bootTip.textContent = tips[i++ % tips.length];
+      bootTip.classList.add('is-in');
+    }, 350);
+  };
+  show();
+  const id = setInterval(show, 4200);
+  return () => clearInterval(id);
+}
 const bootMessage = document.getElementById('boot-message');
 const canvas = document.getElementById('game-canvas');
 const uiRoot = document.getElementById('ui-root');
 
 const nextFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
 
-async function onProgress(fraction, message) {
-  bootFill.style.transform = `scaleX(${fraction})`;
-  bootMessage.textContent = message;
+/** @param {string} messageKey clave i18n del texto de carga */
+async function onProgress(fraction, messageKey) {
+  setProgress(fraction);
+  bootMessage.textContent = t(messageKey);
   await nextFrame(); // cede el hilo para que la barra se pinte
 }
 
@@ -31,21 +72,55 @@ async function loadFonts() {
 }
 
 async function main() {
+  window.__HOO_LOADING = true;
+  i18n.init(); // idioma guardado, o detectado la primera vez (inglés si no es uno de los 6)
+  document.documentElement.lang = i18n.lang;
+  const stopTips = startTips();
+  const ver = document.getElementById('boot-version');
+  if (ver) ver.textContent = `v${GAME.version}${GAME.stage ? ` · ${t('ui.beta.badge')}` : ''}`;
   const save = new SaveManager();
-  const game = new Game({ canvas, settings: save.loadSettings() });
+  const settings = save.loadSettings();
+  // calidad automática: la primera vez se mide el equipo (un PC modesto no arranca en MEDIA y se atasca)
+  let autoDetected = null;
+  if (settings.graphics.auto && !settings.graphics.detected) {
+    const { tier, signals } = detectQuality();
+    settings.graphics.quality = tier;
+    settings.graphics.detected = tier;
+    if (tier === 'veryLow') settings.graphics.renderScale = Math.min(settings.graphics.renderScale, 0.75);
+    save.saveSettings(settings);
+    autoDetected = tier;
+    console.info('[calidad] detectada', tier, signals);
+  }
+  const game = new Game({ canvas, settings });
   game.bus.on('game:fatal', showFatalError);
 
-  await onProgress(0.1, 'Cargando tipografías…');
+  await onProgress(0.1, 'boot.fonts');
   await loadFonts();
-  await game.init({ onProgress });
+  await game.init({ onProgress: (f, key) => onProgress(0.12 + f * 0.26, key === 'boot.ready' ? 'boot.characters' : key) });
+  // personajes con nombre, personal y animaciones (comprimidos): con barra de progreso real
+  await onProgress(0.4, 'boot.characters');
+  let kc = 0;
+  let kp = 0;
+  let km = 0;
+  const bar = () => setProgress(0.4 + (kc * 0.7 + kp * 0.15 + km * 0.15) * 0.48);
+  await Promise.all([loadCharacters((k) => ((kc = k), bar())), loadProps((k) => ((kp = k), bar())), loadModels((k) => ((km = k), bar())), loadNeonFont()]);
 
-  await onProgress(0.9, 'Construyendo el casino…');
+  await onProgress(0.9, 'boot.casino');
   const app = new App({ game, uiRoot, save });
   const overlay = new DebugOverlay({ root: uiRoot, game });
 
   app.start();
+  // shaders compilados en paralelo antes de mostrar nada: el primer fotograma no se congela
+  await app.world.precompile();
   game.start();
 
+  // clientes en segundo plano (solo hacen falta tras la reapertura)
+  loadCustomers().then(() => app.npcs?.onCustomersLoaded?.());
+
+  if (autoDetected) app.notifyAutoQuality?.(autoDetected);
+
+  setProgress(1);
+  stopTips();
   window.__HOO_BOOTED = true;
   window.houseOfOdds = { game, app, overlay, save }; // asa de depuración desde la consola
   bootScreen.classList.add('boot--hidden');

@@ -61,12 +61,16 @@ export function sanitizeSettings(raw, defaults = DEFAULT_SETTINGS) {
       shadows: bool(g.shadows, defaults.graphics.shadows),
       effects: bool(g.effects, defaults.graphics.effects),
       antialias: bool(g.antialias, defaults.graphics.antialias),
+      postFx: bool(g.postFx, defaults.graphics.postFx),
       screenFx: bool(g.screenFx, defaults.graphics.screenFx),
+      auto: bool(g.auto, defaults.graphics.auto),
+      detected: QUALITY_ORDER.includes(g.detected) ? g.detected : '',
     },
     audio: {
       master: clamp(a.master, 0, 1, defaults.audio.master),
       music: clamp(a.music, 0, 1, defaults.audio.music),
       sfx: clamp(a.sfx, 0, 1, defaults.audio.sfx),
+      voice: clamp(a.voice, 0, 1, defaults.audio.voice),
     },
     controls: {
       mouseSensitivity: clamp(c.mouseSensitivity, 0.2, 3, defaults.controls.mouseSensitivity),

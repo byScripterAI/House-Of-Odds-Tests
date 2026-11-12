@@ -1,20 +1,18 @@
 import { ECONOMY } from '../config.js';
+import { TAB_FILTERS, VENDORS } from '../data/vendors.js';
+import { t } from '../i18n/index.js';
 import { UPGRADES } from '../data/upgrades.js';
 import { ACHIEVEMENTS, OBJECTIVES, ZONES } from '../data/progression.js';
 import { EFFECTS, SYMBOLS, SYMBOL_IDS } from '../data/symbols.js';
 import { symbolCanvas } from '../machines/symbol-art.js';
 import { Screen, button, el, uiSfx } from './ui-kit.js';
 
-const TABS = [
-  ['casino', 'CASINO'],
-  ['machine', 'MÁQUINA'],
-  ['objectives', 'OBJETIVOS'],
-  ['collection', 'COLECCIÓN'],
-];
+const ALL_TABS = ['services', 'works', 'machine', 'decor', 'objectives', 'collection'];
 
 const GEM = '<svg class="gem" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2 21 10 12 22 3 10Z" fill="currentColor"/><path d="M12 2 21 10H3Z" fill="#fff" opacity=".35"/></svg>';
 const svg = (body) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
 const ICONS = {
+  clean: svg('<path d="M14 3 9 14M7 14h6l1 7H6Z"/><path d="M17 6l1-2 1 2 2 1-2 1-1 2-1-2-2-1Z"/>'),
   lighting: svg('<path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0 0 12 3Z"/>'),
   decor: svg('<path d="m12 3 2.6 5.6 6 .8-4.4 4.2 1.1 6-5.3-2.9-5.3 2.9 1.1-6L3.4 9.4l6-.8Z"/>'),
   expand: svg('<path d="M4 20V6l8-3 8 3v14M9 20v-6h6v6"/>'),
@@ -24,14 +22,16 @@ const ICONS = {
   synergy: svg('<path d="M3 18 2 7l5 4 5-7 5 7 5-4-1 11Z"/>'),
 };
 
-const FUTURE_MACHINES = ['NEON RUSH', 'GOLDEN EMPEROR', 'THE ABYSS'];
+const FUTURE_MACHINES = ['NEON RUSH', 'GOLDEN EMPEROR', 'THE ABYSS']; // nombres propios (marcas), no se traducen
 
 /** Panel del mostrador: mejoras, objetivos y colección. */
 export class ManagerPanel extends Screen {
   #getProgress;
   #onBuy;
   #onClose;
-  #tab = 'casino';
+  #tab = 'services';
+  #vendor = 'counter';
+  #title;
   #justBought = null;
   #balance;
   #tabsEl;
@@ -47,10 +47,11 @@ export class ManagerPanel extends Screen {
     const card = el('div', 'panel panel--manager');
     const head = el('div', 'manager__head');
     this.#balance = el('div', 'manager__balance');
-    head.append(el('h2', 'panel__title', 'TIENDA'), this.#balance);
+    this.#title = el('h2', 'panel__title', () => t(VENDORS[this.#vendor].title));
+    head.append(this.#title, this.#balance);
     this.#tabsEl = el('div', 'tabs');
-    for (const [id, label] of TABS) {
-      const b = button(label, () => {
+    for (const id of ALL_TABS) {
+      const b = button(() => t(`shop.tab.${id}`), () => {
         this.#tab = id;
         this.#justBought = null;
         this.refresh();
@@ -59,27 +60,53 @@ export class ManagerPanel extends Screen {
       this.#tabsEl.append(b);
     }
     this.#content = el('div', 'manager__content');
-    card.append(head, this.#tabsEl, this.#content, button('CERRAR  ·  ESC', () => this.#onClose(), { cls: 'btn--ghost manager__close' }));
+    card.append(head, this.#tabsEl, this.#content, button(() => t('shop.close'), () => this.#onClose(), { cls: 'btn--ghost manager__close' }));
     this.el.append(card);
   }
 
-  open() {
+  /** @param {'counter'|'daniel'|'sofia'} vendor */
+  open(vendor = 'counter') {
+    this.#vendor = Object.hasOwn(VENDORS, vendor) ? vendor : 'counter';
+    this.#tab = VENDORS[this.#vendor].tabs[0];
+    this.#justBought = null;
     this.refresh();
     this.show();
+  }
+
+  get vendor() {
+    return this.#vendor;
   }
 
   refresh() {
     const p = this.#getProgress();
     this.#balance.textContent = `${p.marks} ${ECONOMY.currency.label}  ·  ${ECONOMY.prestige.label} ${p.prestige}`;
-    for (const b of this.#tabsEl.children) b.classList.toggle('is-active', b.dataset.tab === this.#tab);
-    const view = { casino: () => this.#upgrades('casino'), machine: () => this.#upgrades('machine'), objectives: () => this.#objectives(), collection: () => this.#collection() }[this.#tab]();
+    this.#title.textContent = t(VENDORS[this.#vendor].title);
+    const tabs = VENDORS[this.#vendor].tabs;
+    for (const b of this.#tabsEl.children) {
+      b.hidden = !tabs.includes(b.dataset.tab);
+      b.classList.toggle('is-active', b.dataset.tab === this.#tab);
+    }
+    this.#tabsEl.hidden = tabs.length < 2;
+    const view = { services: () => this.#services(), works: () => this.#upgrades('works'), machine: () => this.#upgrades('machine'), decor: () => this.#upgrades('decor'), objectives: () => this.#objectives(), collection: () => this.#collection() }[this.#tab]();
     this.#content.replaceChildren(view);
   }
 
-  #upgrades(branch) {
+  /** Directorio: quién hace qué en el casino (el mostrador ya no vende). */
+  #services() {
+    const wrap = el('div', 'services');
+    wrap.append(el('p', 'services__intro', t('shop.services.intro')));
+    for (const id of ['daniel', 'sofia']) {
+      const row = el('div', 'services__row');
+      row.append(el('h4', 'services__name', `${t(`npc.${id}.name`)} · ${t(`npc.${id}.role`)}`), el('p', 'services__text', t(`shop.services.${id}`)));
+      wrap.append(row);
+    }
+    return wrap;
+  }
+
+  #upgrades(tab) {
     const p = this.#getProgress();
     const grid = el('div', 'cards');
-    const list = Object.values(UPGRADES).filter((x) => x.branch === branch);
+    const list = Object.values(UPGRADES).filter(TAB_FILTERS[tab]);
     // primero lo que puedes comprar ya, luego lo demás en el orden original
     const rank = (u) => (p.has(u.id) ? 3 : p.canBuy(u.id).ok ? 0 : p.canBuy(u.id).reason === 'marks' ? 1 : 2);
     list.sort((a, b) => rank(a) - rank(b));
@@ -91,20 +118,24 @@ export class ManagerPanel extends Screen {
       const icon = el('div', 'card__icon');
       icon.insertAdjacentHTML('beforeend', ICONS[u.group] ?? ICONS.mod); // SVG estático y de confianza
       const head = el('div', 'card__head');
-      head.append(icon, el('h4', 'card__name', u.name));
-      card.append(head, el('p', 'card__desc', u.desc));
+      head.append(icon, el('h4', 'card__name', t(`upgrade.${u.id}.name`)));
+      card.append(head, el('p', 'card__desc', t(`upgrade.${u.id}.desc`)));
       const foot = el('div', 'card__foot');
       if (owned) {
-        foot.append(el('span', 'card__tag', '✓ INSTALADA'));
+        foot.append(el('span', 'card__tag', t('shop.owned')));
       } else if (check.reason === 'prestige') {
-        foot.append(el('span', 'card__lock', `Requiere ${ECONOMY.prestige.label} ${check.need}`));
+        foot.append(el('span', 'card__lock', t('shop.requiresPrestige', { need: check.need })));
+      } else if (check.reason === 'reserve') {
+        const price = el('span', 'card__price', `${u.cost}`);
+        price.insertAdjacentHTML('afterbegin', GEM);
+        foot.append(price, el('span', 'card__need', t('shop.reserve', { n: check.need - p.marks })));
       } else if (check.reason === 'requires') {
-        foot.append(el('span', 'card__lock', `Requiere: ${UPGRADES[check.need].name}`));
+        foot.append(el('span', 'card__lock', t('shop.requiresUpgrade', { name: t(`upgrade.${check.need}.name`) })));
       } else {
         const price = el('span', 'card__price', `${u.cost}`);
         price.insertAdjacentHTML('afterbegin', GEM);
         if (check.ok) {
-          const buy = button('COMPRAR', (event) => {
+          const buy = button(t('shop.buy'), (event) => {
             const r = event.currentTarget.getBoundingClientRect();
             const origin = { x: (r.left + r.width / 2) / window.innerWidth, y: (r.top + r.height / 2) / window.innerHeight };
             this.#justBought = u.id;
@@ -118,7 +149,7 @@ export class ManagerPanel extends Screen {
           const fill = el('div', 'card__meter-fill');
           fill.style.width = `${Math.max(4, Math.min(100, (p.marks / u.cost) * 100))}%`;
           meter.append(fill);
-          foot.append(price, el('span', 'card__need', `Faltan ${u.cost - p.marks}`), meter);
+          foot.append(price, el('span', 'card__need', t('shop.missing', { n: u.cost - p.marks })), meter);
         }
       }
       card.append(foot);
@@ -137,21 +168,21 @@ export class ManagerPanel extends Screen {
       const value = Math.min(o.target, metrics[o.metric]);
       const row = el('div', `objective${done ? ' is-done' : ''}`);
       const top = el('div', 'objective__top');
-      top.append(el('span', 'objective__name', `${done ? '✓ ' : ''}${o.name}`), el('span', 'objective__reward', `+${o.reward} ${ECONOMY.currency.label}`));
+      top.append(el('span', 'objective__name', `${done ? '✓ ' : ''}${t(`objective.${o.id}.name`)}`), el('span', 'objective__reward', `+${o.reward} ${ECONOMY.currency.label}`));
       const bar = el('div', 'bar');
       const fill = el('div', 'bar__fill');
       fill.style.width = `${(value / o.target) * 100}%`;
       bar.append(fill);
-      row.append(top, el('div', 'objective__desc', `${o.desc}  (${value}/${o.target})`), bar);
+      row.append(top, el('div', 'objective__desc', `${t(`objective.${o.id}.desc`)}  (${value}/${o.target})`), bar);
       list.append(row);
     }
     const ach = el('div', 'achievements');
-    ach.append(el('h3', 'set-section__title', `LOGROS  ${p.state.achievements.length}/${ACHIEVEMENTS.length}`));
+    ach.append(el('h3', 'set-section__title', t('shop.achievements', { n: p.state.achievements.length, total: ACHIEVEMENTS.length })));
     const grid = el('div', 'ach-grid');
     for (const a of ACHIEVEMENTS) {
       const got = p.state.achievements.includes(a.id);
       const item = el('div', `ach${got ? ' is-got' : ''}`);
-      item.append(el('div', 'ach__name', got ? a.name : '???'), el('div', 'ach__desc', got ? a.desc : 'Aún por descubrir'));
+      item.append(el('div', 'ach__name', got ? t(`achievement.${a.id}.name`) : t('shop.undiscovered')), el('div', 'ach__desc', got ? t(`achievement.${a.id}.desc`) : t('shop.toDiscover')));
       grid.append(item);
     }
     ach.append(grid);
@@ -168,22 +199,22 @@ export class ManagerPanel extends Screen {
     for (const id of SYMBOL_IDS) {
       const found = c.symbols.includes(id);
       const cell = el('div', `symbol${found ? ' is-found' : ''}`);
-      cell.append(symbolCanvas(id, 72, !found), el('div', 'symbol__name', found ? SYMBOLS[id].name : '???'));
+      cell.append(symbolCanvas(id, 72, !found), el('div', 'symbol__name', found ? t(`symbol.${id}`) : t('shop.undiscovered')));
       symbols.append(cell);
     }
 
     const effects = el('div', 'chips');
     for (const e of Object.values(EFFECTS)) {
-      effects.append(el('span', `chip${c.effects.includes(e.id) ? ' is-found' : ''}`, c.effects.includes(e.id) ? e.name : '???'));
+      effects.append(el('span', `chip${c.effects.includes(e.id) ? ' is-found' : ''}`, c.effects.includes(e.id) ? t(`effect.${e.id}`) : t('shop.undiscovered')));
     }
 
     const machines = el('div', 'list');
     machines.append(el('div', 'list__row is-found', '✓ THE CLASSIC'));
-    for (const name of FUTURE_MACHINES) machines.append(el('div', 'list__row', `${name} — bloqueada · próximamente`));
+    for (const name of FUTURE_MACHINES) machines.append(el('div', 'list__row', t('shop.machineLocked', { name })));
 
     const zones = el('div', 'list');
     for (const z of Object.values(ZONES)) {
-      zones.append(el('div', `list__row${z.built ? ' is-found' : ''}`, z.built ? `✓ ${z.name} — abierta` : `${z.name} — ${ECONOMY.prestige.label} ${z.unlock.prestige} · ${z.unlock.marks} ${ECONOMY.currency.label} · próximamente`));
+      zones.append(el('div', `list__row${z.built ? ' is-found' : ''}`, z.built ? t('shop.zoneOpen', { name: t(`zone.${z.id}`) }) : t('shop.zoneSoon', { name: t(`zone.${z.id}`), prestige: z.unlock.prestige, marks: z.unlock.marks })));
     }
 
     const block = (title, node) => {
@@ -191,7 +222,7 @@ export class ManagerPanel extends Screen {
       b.append(el('h3', 'set-section__title', title), node);
       return b;
     };
-    wrap.append(block(`SÍMBOLOS  ${c.symbols.length}/${SYMBOL_IDS.length}`, symbols), block(`EFECTOS  ${c.effects.length}/${Object.keys(EFFECTS).length}`, effects), block('MÁQUINAS', machines), block('ZONAS', zones));
+    wrap.append(block(t('shop.symbols', { n: c.symbols.length, total: SYMBOL_IDS.length }), symbols), block(t('shop.effects', { n: c.effects.length, total: Object.keys(EFFECTS).length }), effects), block(t('shop.machines'), machines), block(t('shop.zones'), zones));
     return wrap;
   }
 }

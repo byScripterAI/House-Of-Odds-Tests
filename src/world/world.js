@@ -1,466 +1,986 @@
+import { t } from '../i18n/index.js';
 import * as THREE from 'three';
-import { PALETTE } from '../config.js';
+import { FEATURES, PALETTE } from '../config.js';
 import { ZONES } from '../data/progression.js';
+import { Batch, seg, tiledBox, tiledPlane } from '../gfx/geometry.js';
+import { buildEnvironment } from '../gfx/environment.js';
+import { clearBakedMaterials } from '../gfx/shader-textures.js';
+import { placeProp } from './props/assets.js';
+import { RouletteView } from '../games/roulette-view.js';
+import { createMaterialKit } from '../gfx/materials.js';
 import { createClassicMachine } from '../machines/classic.js';
-import { carpetTexture, glowTexture, marbleTexture, neonTexture, paintingTexture, plateTexture, wallTexture } from './procedural-textures.js';
+import { CLASSIC, COUNTER, DECOR_SLOTS, DOORS, HALL, LOUNGE, NORTH_WING, RECEPTION, SLOT_BANKS, SPAWN, TABLES, doorPlacement, playerBounds, staticColliders } from './layout.js';
+import { createPalette } from './palette.js';
+import { glowTexture, neonTexture } from './procedural-textures.js';
+import { setSlotsLit, slotBank } from './props/cabinets.js';
+import { createNeonSign, neonCanDraw } from './neon.js';
+import { buildCarpet, buildChandelier, buildClutter, buildGrimeDecals, buildLoungeRug, buildStatue, painting } from './props/decor.js';
+import { buildDamage } from './props/damage.js';
+import { buildDecorSets } from './props/decor-sets.js';
+import { armchair, bench, coffeeTable, floorLamp, plant, sofa, workbench, workbenchWall } from './props/furniture.js';
+import { createHelpers } from './props/helpers.js';
+import { DOOR_H, buildCounter, buildPilasters, buildReception, buildShell, doorFrame } from './props/structure.js';
+import { blackjackTable, rouletteTable } from './props/tables.js';
+import { buildStoryItems } from './props/story-items.js';
+import { STORY_SPOTS } from './layout.js';
 
 /**
- * MAIN FLOOR: el casino. Construye escenario, luces, colisiones e interactuables
- * y expone un "controlador de escena" para Game (ver core/game.js).
+ * EL CASINO (MAIN FLOOR + ala norte ampliable).
  *
- * Mapa (metros): sala x∈[-9,9], z∈[-8,8], altura 4,6. El jugador aparece en el
- * sur mirando al norte; la máquina está en el centro, el mostrador junto a la
- * pared norte, la puerta del Ala norte en el centro de la pared norte y las
- * cuatro puertas bloqueadas en las paredes oeste y este.
+ * Construye escenario, luces, colisiones, interactuables y anclas para PNJ a
+ * partir del plano (layout.js) y expone un «controlador de escena» para Game.
+ *
+ * Calidad: los materiales, la finura de los modelos, las texturas, la
+ * decoración menor y el número de luces dependen del nivel gráfico. Si cambia
+ * algo que exige regenerar geometría, el mundo se RECONSTRUYE en caliente
+ * (conservando el estado: compras, limpieza, máquina).
+ *
+ * Estado del local: `dirt` (1 = abandonado, 0 = impecable) alimenta la capa de
+ * suciedad de todos los materiales, las manchas, los trastos, el neón roto y
+ * el parpadeo de las luces. Cambia de forma animada al limpiar.
  */
 
-const H = 4.6;
-const MACHINE_POS = new THREE.Vector3(0, 0.12, -1.5);
-const LIGHT_LEVELS = {
-  spot: [320, 400, 480, 560],
-  fill: [40, 55, 70, 90],
-  red: [28, 36, 46, 60],
-  cove: [0.9, 1.3, 1.8, 2.4],
-};
-
-function buildEnvironment(renderer) {
-  const env = new THREE.Scene();
-  env.background = new THREE.Color(0x0a0608);
-  const panel = (w, h, color, k, x, y, z, rx = 0, ry = 0) => {
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ color: new THREE.Color(color).multiplyScalar(k), side: THREE.DoubleSide }));
-    m.position.set(x, y, z);
-    m.rotation.set(rx, ry, 0);
-    env.add(m);
-  };
-  panel(8, 1.2, 0xfff0d0, 6, 0, 9, 0, Math.PI / 2);
-  panel(10, 1, 0xffc070, 3, 0, 8, 6, Math.PI / 2);
-  panel(8, 4, 0xc42240, 2.5, -9, 3, 0, 0, Math.PI / 2);
-  panel(8, 4, 0xc42240, 2.5, 9, 3, 0, 0, Math.PI / 2);
-  panel(6, 3, 0xd4af37, 1.5, 0, 2, -9);
-  const pmrem = new THREE.PMREMGenerator(renderer);
-  const target = pmrem.fromScene(env, 0.03);
-  pmrem.dispose();
-  env.traverse((o) => { o.geometry?.dispose(); o.material?.dispose(); });
-  return target;
-}
+// iluminación comprada: el local empieza algo apagado (sin llegar a oscuro) y cada mejora se nota
+// nivel de la instalación eléctrica: 0 = casino abandonado (penumbra cálida, se ve bien), 1+ = reparada.
+// La reparación SUSTITUYE la luz vieja (no se suma): nivel 1 = la penumbra cálida de antes, bien equilibrada.
+const LIGHT_LEVELS = [0.3, 0.56, 0.62, 0.68];
+/** Brillo de las luminarias (emisivos) por nivel: con la instalación vieja apenas lucen. */
+const GLOW_LEVELS = [0.24, 0.42, 0.48, 0.54];
+const BUILD_KEYS = ['material', 'detail', 'textureSize', 'propDensity', 'reflections', 'dynamicLights', 'particleScale'];
+const buildSignature = (g) => BUILD_KEYS.map((k) => g[k]).join('|');
 
 export function createWorld({ renderer, graphics }) {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(PALETTE.black);
-  scene.fog = new THREE.FogExp2(PALETTE.black, 0.02);
-  const camera = new THREE.PerspectiveCamera(72, 1, 0.05, 80);
+  scene.fog = new THREE.FogExp2(0x0a0607, 0.022);
+  const camera = new THREE.PerspectiveCamera(72, 1, 0.05, 120);
 
-  const owned = [];
-  const track = (o) => (owned.push(o), o);
+  // Estructuras ESTABLES (el jugador, la app y los PNJ guardan su referencia).
   const colliders = [];
   const interactables = [];
-  const signs = [];
-  const shadowers = [];
+  const anchors = [];
+  const bounds = playerBounds(false);
+  const dirt = { hall: { value: 1 } };
 
   const envTarget = buildEnvironment(renderer);
-  scene.environment = envTarget.texture;
-  scene.environmentIntensity = 0.55;
-
-  // ---------- materiales ----------
-  const floorTex = track(marbleTexture(512, [18.4 / 2.4, 16.4 / 2.4]));
-  const M = {
-    floor: track(new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.2, metalness: 0.2, envMapIntensity: 1.1 })),
-    gold: track(new THREE.MeshStandardMaterial({ color: PALETTE.gold, metalness: 1, roughness: 0.3 })),
-    carbon: track(new THREE.MeshStandardMaterial({ color: 0x161416, metalness: 0.5, roughness: 0.4 })),
-    wood: track(new THREE.MeshStandardMaterial({ color: 0x1d100c, metalness: 0.15, roughness: 0.45 })),
-    velvet: track(new THREE.MeshStandardMaterial({ color: 0x7a1226, roughness: 0.95 })),
-    marble: track(new THREE.MeshStandardMaterial({ color: 0x2a2528, metalness: 0.25, roughness: 0.2 })),
-    ceiling: track(new THREE.MeshStandardMaterial({ color: 0x0f0a0b, roughness: 0.9 })),
-    mirror: track(new THREE.MeshStandardMaterial({ color: 0xcfc6bb, metalness: 1, roughness: 0.06 })),
-    cove: track(new THREE.MeshStandardMaterial({ color: 0x200308, emissive: 0xc42240, emissiveIntensity: 1 })),
-    candle: track(new THREE.MeshBasicMaterial({ color: 0xffe2a0 })),
-    amber: track(new THREE.MeshStandardMaterial({ color: 0x3b1d05, emissive: 0xffa43a, emissiveIntensity: 0.7, roughness: 0.3 })),
-    screen: track(new THREE.MeshBasicMaterial({ color: 0x66ffcc })),
-  };
-  const wallMat = (ux, uy) => {
-    const t = track(wallTexture([ux, uy]));
-    return track(new THREE.MeshStandardMaterial({ map: t, roughness: 0.85, metalness: 0.05 }));
+  const state = {
+    g: graphics,
+    signature: buildSignature(graphics),
+    loadout: null,
+    dirtTarget: 1,
+    expanded: false,
+    wingOpen: 0,
+    shopAlert: false,
+    pendingRebuild: false,
+    story: { items: { toolbox: true, doc_box: true }, entranceOpen: false, receptionStyle: null, breaker: false, interacts: new Set(), powered: true, machineBlocked: false, repaired: false, serviceDoor: false },
   };
 
-  // ---------- helpers ----------
-  const add = (geo, mat, x, y, z, parent = scene, shadow = true) => {
-    const m = new THREE.Mesh(track(geo), mat);
-    m.position.set(x, y, z);
-    if (shadow) { m.castShadow = true; m.receiveShadow = true; shadowers.push(m); }
-    parent.add(m);
-    return m;
-  };
-  const box = (w, h, d, mat, x, y, z, parent) => add(new THREE.BoxGeometry(w, h, d), mat, x, y, z, parent);
-  const collide = (cx, cz, w, d, enabled = true) => {
-    const c = { minX: cx - w / 2, maxX: cx + w / 2, minZ: cz - d / 2, maxZ: cz + d / 2, enabled };
-    colliders.push(c);
-    return c;
-  };
-  const sign = (text, w, h, x, y, z, ry, opts = {}) => {
-    const mat = track(new THREE.MeshBasicMaterial({ map: track(neonTexture(text, opts)), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
-    const m = new THREE.Mesh(track(new THREE.PlaneGeometry(w, h)), mat);
-    m.position.set(x, y, z);
-    m.rotation.y = ry;
-    scene.add(m);
-    signs.push({ mat, phase: signs.length * 1.7 });
-    return m;
-  };
-  const interact = (def) => (interactables.push(def), def);
+  let B = null; // construcción actual
+  const handlers = { onReelStop: null, onTick: null, onDone: null };
 
-  // ---------- estructura ----------
-  add(new THREE.PlaneGeometry(18.4, 16.4), M.floor, 0, 0, 0, scene, false).rotation.x = -Math.PI / 2;
-  scene.children.at(-1).receiveShadow = true;
-  add(new THREE.PlaneGeometry(18.4, 16.4), M.ceiling, 0, H, 0, scene, false).rotation.x = Math.PI / 2;
+  // ======================================================================== construcción
+  function build(g) {
+    const root = new THREE.Group();
+    root.name = 'casino';
+    scene.add(root);
+    const owned = [];
+    const track = (o) => (owned.push(o), o);
+    const kit = createMaterialKit(g, { dirt });
+    const M = createPalette(kit, g, renderer);
+    const H = createHelpers(g.detail);
+    const batch = new Batch();
+    const chipMats = new Map();
+    const ctx = {
+      g, kit, M, H, B: batch, root, anchors, track,
+      dynamic: [], decalMats: [], sconces: [],
+      seg: (n) => seg(g.detail, n, 6),
+      chip(color) {
+        if (!chipMats.has(color)) chipMats.set(color, kit.make({ color, rough: 0.45, metal: 0.05 }));
+        return chipMats.get(color);
+      },
+      addCollider(cx, cz, w, d, enabled = true) {
+        const c = { minX: cx - w / 2, maxX: cx + w / 2, minZ: cz - d / 2, maxZ: cz + d / 2, enabled };
+        colliders.push(c);
+        return c;
+      },
+    };
+    colliders.length = 0;
+    interactables.length = 0;
+    anchors.length = 0;
+    colliders.push(...staticColliders());
 
-  const wallS = box(18.8, H, 0.4, wallMat(8, 2), 0, H / 2, 8.2);
-  const wallW = box(0.4, H, 16.4, wallMat(7, 2), -9.2, H / 2, 0);
-  const wallE = box(0.4, H, 16.4, wallMat(7, 2), 9.2, H / 2, 0);
-  box(7.8, H, 0.4, wallMat(3.3, 2), -5.5, H / 2, -8.2);
-  box(7.8, H, 0.4, wallMat(3.3, 2), 5.5, H / 2, -8.2);
-  box(3.2, 1.8, 0.4, wallMat(1.4, 1), 0, H - 0.9, -8.2);
-  collide(0, 8.2, 18.8, 0.4);
-  collide(-9.2, 0, 0.4, 16.4);
-  collide(9.2, 0, 0.4, 16.4);
-  collide(-5.5, -8.2, 7.8, 0.4);
-  collide(5.5, -8.2, 7.8, 0.4);
-  void wallS; void wallW; void wallE;
+    const signs = [];
+    /** `text` y `opts.sub` pueden ser funciones (se reevalúan al cambiar de idioma). */
+    const signTex = (text, opts) => neonTexture(typeof text === 'function' ? text() : text, { ...opts, sub: typeof opts.sub === 'function' ? opts.sub() : opts.sub ?? null });
+    const sign = (text, w, h, x, y, z, ry, opts = {}, parent = root) => {
+      const txt = typeof text === 'function' ? text() : text;
+      const sub = typeof opts.sub === 'function' ? opts.sub() : opts.sub ?? null;
+      // neón 3D de tubos si la fuente tiene todas las letras (el chino usa el rótulo plano)
+      if (neonCanDraw(txt) && (!sub || neonCanDraw(String(sub).toUpperCase()))) {
+        const neon = createNeonSign(ctx, txt, { w, h, color: opts.color, glow: opts.glow, sub, dead: opts.dead });
+        neon.group.position.set(x, y, z);
+        neon.group.rotation.y = ry;
+        parent.add(neon.group);
+        const entry = { neon, mesh: neon.group, mat: null, phase: signs.length * 1.7, text, opts, dynamic: typeof text === 'function' || typeof opts.sub === 'function', broken: !!opts.dead };
+        signs.push(entry);
+        return entry;
+      }
+      const mat = kit.basic({ map: signTex(text, opts), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+      const m = new THREE.Mesh(track(new THREE.PlaneGeometry(w, h)), mat);
+      m.position.set(x, y, z);
+      m.rotation.y = ry;
+      parent.add(m);
+      const entry = { mat, mesh: m, phase: signs.length * 1.7, text, opts, dynamic: typeof text === 'function' || typeof opts.sub === 'function', broken: !!opts.dead };
+      signs.push(entry);
+      return entry;
+    };
 
-  // zócalo de madera con moldura dorada (salta los huecos de las puertas)
-  const wainscot = (x, z, len, alongX) => {
-    const [w, d] = alongX ? [len, 0.08] : [0.08, len];
-    box(w, 1.1, d, M.wood, x, 0.55, z);
-    box(alongX ? len : 0.12, 0.05, alongX ? 0.12 : len, M.gold, x, 1.12, z);
-  };
-  wainscot(0, 7.96, 17.8, true);
-  wainscot(-5.5, -7.96, 7.6, true);
-  wainscot(5.5, -7.96, 7.6, true);
-  for (const s of [-1, 1]) for (const [a, b] of [[-8, -4], [-2, 2], [4, 8]]) wainscot(s * 8.96, (a + b) / 2, b - a, false);
+    // ---------------- estructura
+    buildShell(ctx);
+    buildPilasters(ctx);
+    buildCounter(ctx);
+    buildReception(ctx);
 
-  // vigas doradas y luces de cornisa
-  for (const z of [-4, 3]) box(18, 0.14, 0.34, M.gold, 0, H - 0.07, z);
-  const coveStrips = [
-    box(17.6, 0.07, 0.14, M.cove, 0, H - 0.3, 7.85), box(0.14, 0.07, 15.6, M.cove, -8.85, H - 0.3, 0), box(0.14, 0.07, 15.6, M.cove, 8.85, H - 0.3, 0),
-    box(7.4, 0.07, 0.14, M.cove, -5.5, H - 0.3, -7.85), box(7.4, 0.07, 0.14, M.cove, 5.5, H - 0.3, -7.85),
-  ];
-  coveStrips.forEach((c) => (c.castShadow = false));
+    // ---------------- mesas y máquinas antiguas
+    TABLES.blackjack.forEach((tb, i) => blackjackTable(ctx, tb, { id: tb.id, felt: i === 1 ? 'red' : 'green' }));
+    TABLES.roulette.forEach((tb) => rouletteTable(ctx, tb, { id: tb.id, wheel: false }));
+    // ruedas reales también en las mesas de ambiente (giran despacio); la jugable la pone TableController
+    const wheels = TABLES.roulette.filter((tb) => tb.id !== 'royal_roulette').map((tb) => track(new RouletteView({ scene: root, table: tb })));
+    let bankIndex = 0;
+    for (const bank of SLOT_BANKS) {
+      slotBank(ctx, bank, bankIndex);
+      bankIndex += bank.count * 2;
+    }
 
-  // columnas
-  for (const sx of [-1, 1]) for (const z of [-5.5, 0, 5.5]) {
-    const x = sx * 6.6;
-    add(new THREE.CylinderGeometry(0.3, 0.3, H, 20), M.marble, x, H / 2, z);
-    add(new THREE.CylinderGeometry(0.42, 0.46, 0.3, 20), M.gold, x, 0.15, z);
-    add(new THREE.CylinderGeometry(0.4, 0.3, 0.3, 20), M.gold, x, H - 0.15, z);
-    add(new THREE.TorusGeometry(0.31, 0.03, 8, 20), M.gold, x, 1.5, z).rotation.x = Math.PI / 2;
-    collide(x, z, 0.8, 0.8);
+    // ---------------- salón (suroeste) y decoración fija
+    buildLoungeRug(ctx, LOUNGE.rug);
+    for (const a of LOUNGE.armchairs) if (!placeProp(ctx, 'armchair', { x: a.x, z: a.z, yaw: a.yaw })) armchair(ctx, batch.at(a));
+    for (const a of LOUNGE.armchairs) anchors.push({ type: 'armchair', x: a.x, z: a.z, yaw: a.yaw, sitY: 0.45 });
+    if (!placeProp(ctx, 'coffee_table', { x: LOUNGE.table.x, z: LOUNGE.table.z })) coffeeTable(ctx, batch.at(LOUNGE.table));
+    if (placeProp(ctx, 'sofa', { x: -10.7, z: 10.45, yaw: Math.PI })) {
+      colliders.push({ minX: -11.5, maxX: -9.9, minZ: 10.1, maxZ: 10.8, enabled: true });
+      anchors.push({ type: 'armchair', x: -11.09, z: 10.35, yaw: Math.PI, sitY: 0.44 }, { type: 'armchair', x: -10.31, z: 10.35, yaw: Math.PI, sitY: 0.44 });
+    }
+    hangChandelier(ctx, 'chandelier_01', { x: LOUNGE.table.x, z: LOUNGE.table.z, scale: 1.25, bottom: 3.2 });
+    for (const z of [6.3, 10.2]) floorLamp(ctx, batch.at({ x: -13.1, z }));
+    colliders.push({ minX: -13.4, maxX: -12.8, minZ: 6.0, maxZ: 6.6, enabled: true }, { minX: -13.4, maxX: -12.8, minZ: 9.9, maxZ: 10.5, enabled: true });
+    const plants = [[-3.4, 10.4], [3.4, 10.4], [-13.3, -10.3], [13.3, -10.3], [13.3, 2.5], [-13.3, 2.5], [-3.4, -10.4], [3.4, -10.4]]; // ninguna tapa el cuadro eléctrico (x −5,2)
+    plants.forEach(([x, z], i) => {
+      if (i >= 4 && g.propDensity < 0.5) return;
+      if (!placeProp(ctx, 'plant', { x, z, yaw: i * 1.3, height: 1.15 + (i % 3) * 0.15 })) plant(ctx, batch.at({ x, z }), { height: 1.2 + (i % 3) * 0.2 });
+      colliders.push({ minX: x - 0.35, maxX: x + 0.35, minZ: z - 0.35, maxZ: z + 0.35, enabled: true });
+    });
+    for (const x of [-6, 6]) {
+      bench(ctx, batch.at({ x, z: 10.55, yaw: Math.PI }));
+      colliders.push({ minX: x - 0.85, maxX: x + 0.85, minZ: 10.25, maxZ: 10.85, enabled: true });
+      anchors.push({ type: 'bench', x, z: 10.55, yaw: Math.PI, sitY: 0.5 });
+    }
+
+    // ---------------- puesto de mantenimiento (Daniel)
+    if (placeProp(ctx, 'work_table', { x: 13.4, z: 0.8, yaw: Math.PI / 2 })) {
+      // mesa de taller real (pintada y gastada) y en la pared el tablero de herramientas
+      workbenchWall(ctx, batch.at({ x: 13.6, z: 0.8, yaw: -Math.PI / 2 }));
+      colliders.push({ minX: 12.82, maxX: 13.98, minZ: -0.42, maxZ: 2.02, enabled: true });
+    } else {
+      workbench(ctx, batch.at({ x: 13.25, z: 0.8, yaw: -Math.PI / 2 }));
+      colliders.push({ minX: 12.85, maxX: 13.7, minZ: -0.1, maxZ: 1.7, enabled: true });
+    }
+    anchors.push({ type: 'workbench', x: 12.35, z: 0.8, yaw: Math.PI / 2 });
+
+    // ---------------- cuadros (uno torcido y otro caído: el local está descuidado)
+    const paintings = [
+      painting(ctx, { x: HALL.minX + 0.05, y: 2.6, z: 1.0, yaw: Math.PI / 2, seed: 'art-1' }),
+      painting(ctx, { x: HALL.maxX - 0.05, y: 2.6, z: -9.8, yaw: -Math.PI / 2, seed: 'art-2', crooked: 0.09 }), // encima del taller de Daniel va su tablero de herramientas
+      painting(ctx, { x: -9, y: 2.6, z: HALL.maxZ - 0.05, yaw: Math.PI, seed: 'art-3' }),
+      painting(ctx, { x: 5.6, y: 2.6, z: HALL.maxZ - 0.05, yaw: Math.PI, seed: 'art-4', crooked: -0.06 }),
+    ];
+    const crooked = [paintings[1], paintings[3]].map((p) => ({ p, rest: p.rotation.z }));
+    const fallen = painting(ctx, { x: 12.9, y: 0.75, z: -1.9, yaw: -Math.PI / 2 + 0.2, seed: 'art-5', w: 1.2, h: 1.5 });
+    fallen.rotation.x = -0.32;
+
+    // ---------------- estrado y THE CLASSIC
+    const dais = batch.at({ x: CLASSIC.x, z: CLASSIC.z });
+    H.cyl(dais, M.marble, CLASSIC.dais, CLASSIC.dais + 0.08, 0.14, 0, 0.07, 0, { segments: 56 });
+    H.torus(dais, M.gold, CLASSIC.dais + 0.02, 0.03, 0, 0.14, 0, { segments: 64 });
+    H.cyl(dais, M.marble, CLASSIC.dais + 0.45, CLASSIC.dais + 0.5, 0.06, 0, 0.03, 0, { segments: 56 });
+    const machine = createClassicMachine({ g, kit });
+    machine.group.position.set(CLASSIC.x, CLASSIC.y, CLASSIC.z);
+    root.add(machine.group);
+    machine.group.traverse((o) => {
+      if (o.isMesh) o.castShadow = o.receiveShadow = g.shadows;
+    });
+    Object.assign(machine, { onReelStop: (i) => handlers.onReelStop?.(i), onTick: (i) => handlers.onTick?.(i), onDone: (r) => handlers.onDone?.(r) });
+    const pool = new THREE.Mesh(track(new THREE.PlaneGeometry(6, 6)), kit.basic({ map: glowTexture(), color: 0xd4af37, transparent: true, opacity: 0.2, blending: THREE.AdditiveBlending, depthWrite: false }));
+    pool.rotation.x = -Math.PI / 2;
+    pool.position.set(CLASSIC.x, 0.15, CLASSIC.z + 0.4);
+    root.add(pool);
+    interactables.push({ id: 'machine', pos: new THREE.Vector3(CLASSIC.x, 1.2, CLASSIC.z + 1.0), radius: 3.0, prompt: { key: 'E', textKey: 'prompt.machine', params: { machine: 'THE CLASSIC' } } });
+
+    // ---------------- mostrador: rótulo, interacción y señal de «tienes algo que comprar»
+    sign(() => t('sign.shop'), 3.6, 0.95, COUNTER.x, 3.9, HALL.minZ + 0.06, 0, { color: '#fff3c4', glow: '#ffb020', font: '700 130px Cinzel, serif', sub: () => t('sign.shopSub') });
+    interactables.push({ id: 'counter', pos: new THREE.Vector3(COUNTER.x, 1.2, COUNTER.front + 0.2), radius: 3.3, prompt: { key: 'E', textKey: 'prompt.shop' } });
+    // mesas jugables (el resto de mesas son de ambiente, con su crupier y clientes)
+    if (FEATURES.cardsChapter) interactables.push({ id: 'table:royal_blackjack', game: 'blackjack', pos: new THREE.Vector3(6.2, 1.0, -6.75), radius: 2.6, prompt: { key: 'E', textKey: 'prompt.table', params: { name: 'ROYAL BLACKJACK' } } });
+    if (FEATURES.cardsChapter) interactables.push({ id: 'table:royal_roulette', game: 'roulette', pos: new THREE.Vector3(-5.6, 1.0, -2.9), radius: 2.6, prompt: { key: 'E', textKey: 'prompt.table', params: { name: 'ROYAL ROULETTE' } } });
+    const shop = buildShopBeacon(ctx);
+
+    // ---------------- puertas
+    const doorObjects = buildDoors(ctx, sign);
+
+    // ---------------- rótulo principal (neón con letras fundidas mientras el local está sucio)
+    const neonOpts = { color: '#fff3c4', glow: '#d4af37', font: '700 118px Cinzel, serif' };
+    // 3D: un solo rótulo cuyas letras fundidas se vuelven a encender; plano: dos capas que se funden
+    const neonBroken = sign('HOUSE OF ODDS', 6.2, 1.55, 0, 4.4, HALL.minZ + 0.075, 0, { ...neonOpts, dead: [1, 10] });
+    const neonClean = neonBroken.neon ? null : sign('HOUSE OF ODDS', 6.2, 1.55, 0, 4.4, HALL.minZ + 0.07, 0, neonOpts);
+
+    // ---------------- lámparas colgantes
+    const pendants = buildPendants(ctx);
+
+    // ---------------- ala norte (oculta hasta ampliar)
+    const wing = buildWing(ctx, sign);
+
+    // ---------------- objetos de la historia
+    const story = buildStoryItems(ctx, sign);
+
+    // ---------------- decoración comprable
+    const carpet = buildCarpet(ctx);
+    const decorSets = buildDecorSets(ctx, { addCollider: ctx.addCollider });
+    const statue = buildStatue(ctx);
+    const chandelier = buildChandelier(ctx);
+
+    // ---------------- suciedad
+    buildGrimeDecals(ctx);
+    const clutter = buildClutter(ctx);
+    // el cuadro caído también se retira con la limpieza
+    clutter.push({ group: fallen, clearAt: 0.5, collider: null, scale: 1 });
+    // desperfectos (goteras, grietas, humedad): los arregla Daniel
+    const damage = buildDamage(ctx);
+
+    // colisionadores de asientos (taburetes de mesas y máquinas)
+    for (const a of anchors) {
+      if (a.type === 'machine-seat' || a.type === 'table-seat') colliders.push({ minX: a.x - 0.22, maxX: a.x + 0.22, minZ: a.z - 0.22, maxZ: a.z + 0.22, enabled: true });
+    }
+
+    // ---------------- fusionar todo lo estático
+    batch.build(root, { cast: g.shadows, receive: true });
+    H.dispose();
+
+    // ---------------- luces
+    const lights = buildLights(ctx, { pendants, machine });
+
+    // ---------------- polvo en suspensión
+    const dust = buildDust(ctx);
+
+    return {
+      root, kit, owned, wheels, machine, signs, signTex, pool, shop, doorObjects, neonClean, neonBroken, pendants, wing, carpet, statue, chandelier, clutter, crooked, lights, dust, ctx, story, damage, decorSets,
+      dispose() {
+        machine.dispose();
+        for (const o of owned) o.dispose?.();
+        kit.dispose();
+        root.traverse((o) => {
+          if (o.userData.sharedAsset) return; // mobiliario cargado: se comparte entre construcciones
+          if (o.isMesh || o.isPoints || o.isInstancedMesh) o.geometry?.dispose();
+          if (o.isInstancedMesh) o.dispose();
+        });
+        lights.dispose();
+        scene.remove(root);
+      },
+    };
   }
 
-  // ---------- pedestal central y máquina ----------
-  const machine = createClassicMachine();
-  machine.group.position.copy(MACHINE_POS);
-  scene.add(machine.group);
-  machine.group.traverse((o) => { if (o.isMesh) shadowers.push(o); });
-  add(new THREE.CylinderGeometry(2.15, 2.25, 0.12, 48), M.marble, MACHINE_POS.x, 0.06, MACHINE_POS.z);
-  add(new THREE.TorusGeometry(2.15, 0.035, 8, 64), M.gold, MACHINE_POS.x, 0.125, MACHINE_POS.z, scene, false).rotation.x = Math.PI / 2;
-  const pool = new THREE.Mesh(track(new THREE.PlaneGeometry(6, 6)), track(new THREE.MeshBasicMaterial({ map: track(glowTexture()), color: 0xd4af37, transparent: true, opacity: 0.22, blending: THREE.AdditiveBlending, depthWrite: false })));
-  pool.rotation.x = -Math.PI / 2;
-  pool.position.set(MACHINE_POS.x, 0.13, MACHINE_POS.z + 0.3);
-  scene.add(pool);
-  const mc = machine.colliderLocal;
-  colliders.push({ minX: MACHINE_POS.x + mc.minX, maxX: MACHINE_POS.x + mc.maxX, minZ: MACHINE_POS.z + mc.minZ, maxZ: MACHINE_POS.z + mc.maxZ, enabled: true });
-  interact({ id: 'machine', pos: new THREE.Vector3(MACHINE_POS.x, 1.2, MACHINE_POS.z + 0.7), radius: 2.9, prompt: { key: 'E', text: 'Usar THE CLASSIC' } });
+  // ======================================================================== piezas con estado
 
-  // ---------- mostrador ----------
-  const CX = -5.5;
-  box(4.2, 1.1, 0.9, M.wood, CX, 0.55, -6.75);
-  box(4.35, 0.07, 1.05, M.gold, CX, 1.12, -6.75);
-  box(3.8, 0.7, 0.03, M.velvet, CX, 0.55, -6.28);
-  box(4.2, 0.1, 0.5, M.carbon, CX, 1.18, -6.55, scene);
-  box(0.5, 0.35, 0.3, M.carbon, CX - 1.2, 1.4, -6.8);
-  add(new THREE.PlaneGeometry(0.42, 0.22), M.screen, CX - 1.2, 1.44, -6.64, scene, false).rotation.x = -0.25;
-  box(3.9, 0.05, 0.4, M.wood, CX, 1.6, -7.8);
-  box(3.9, 0.05, 0.4, M.wood, CX, 2.2, -7.8);
-  add(new THREE.PlaneGeometry(3.4, 1.6), M.mirror, CX, 2.9, -7.97, scene, false);
-  for (let i = 0; i < 9; i++) {
-    const row = i < 5 ? 1.63 : 2.23;
-    add(new THREE.CylinderGeometry(0.05, 0.065, 0.3, 10), M.amber, CX - 1.6 + (i % 5) * 0.8 + (i < 5 ? 0 : 0.4), row + 0.17, -7.8, scene, false);
-  }
-  collide(CX, -7.15, 4.4, 1.7);
-  sign('TIENDA', 3.6, 0.95, CX, 3.75, -7.97, 0, { color: '#fff3c4', glow: '#ffb020', font: '700 130px Cinzel, serif', sub: 'MEJORAS' });
-  interact({ id: 'counter', pos: new THREE.Vector3(CX, 1.2, -6.4), radius: 3.3, prompt: { key: 'E', text: 'Abrir la tienda' } });
-
-  // ---------- señalización de la tienda ----------
-  const shopGem = add(new THREE.OctahedronGeometry(0.28, 0), track(new THREE.MeshStandardMaterial({ color: 0xffe9a8, emissive: 0xffb020, emissiveIntensity: 1.4, metalness: 0.6, roughness: 0.15 })), CX, 2.9, -6.3, scene, false);
-  shopGem.scale.set(1, 1.5, 1);
-  const shopHalo = new THREE.Mesh(track(new THREE.PlaneGeometry(1.8, 1.8)), track(new THREE.MeshBasicMaterial({ map: track(glowTexture()), color: 0xffb020, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false })));
-  shopHalo.position.set(CX, 2.9, -6.28);
-  scene.add(shopHalo);
-  const shopRing = new THREE.Mesh(track(new THREE.RingGeometry(1.25, 1.45, 48)), track(new THREE.MeshBasicMaterial({ color: 0xffb020, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })));
-  shopRing.rotation.x = -Math.PI / 2;
-  shopRing.position.set(CX, 0.015, -4.9);
-  scene.add(shopRing);
-  const shopDisc = new THREE.Mesh(track(new THREE.CircleGeometry(1.25, 48)), track(new THREE.MeshBasicMaterial({ map: track(glowTexture()), color: 0xffb020, transparent: true, opacity: 0.25, blending: THREE.AdditiveBlending, depthWrite: false })));
-  shopDisc.rotation.x = -Math.PI / 2;
-  shopDisc.position.set(CX, 0.014, -4.9);
-  scene.add(shopDisc);
-  const shopArrow = new THREE.Mesh(track(new THREE.ConeGeometry(0.2, 0.45, 4)), track(new THREE.MeshStandardMaterial({ color: 0xffe9a8, emissive: 0xffb020, emissiveIntensity: 1.2 })));
-  shopArrow.rotation.x = Math.PI;
-  shopArrow.position.set(CX, 2.45, -5.6);
-  shopArrow.visible = false;
-  scene.add(shopArrow);
-  const shopLight = new THREE.PointLight(0xffb020, 18, 7, 2);
-  shopLight.position.set(CX, 2.4, -5.4);
-  scene.add(shopLight);
-  let shopAlert = false;
-
-  // ---------- puertas ----------
-  const doors = [
-    { zone: 'neon_lounge', x: -8.98, z: -3, ry: Math.PI / 2 },
-    { zone: 'underground', x: -8.98, z: 3, ry: Math.PI / 2 },
-    { zone: 'golden_room', x: 8.98, z: -3, ry: -Math.PI / 2 },
-    { zone: 'vip_hall', x: 8.98, z: 3, ry: -Math.PI / 2 },
-  ];
-  for (const d of doors) {
-    const zone = ZONES[d.zone];
-    const hex = `#${zone.color.toString(16).padStart(6, '0')}`;
-    const g = new THREE.Group();
-    g.position.set(d.x, 0, d.z);
-    g.rotation.y = d.ry;
-    scene.add(g);
-    box(1.5, 2.5, 0.08, M.carbon, 0, 1.25, 0.04, g);
-    box(1.1, 1.0, 0.03, M.wood, 0, 0.8, 0.1, g);
-    box(1.1, 0.9, 0.03, M.wood, 0, 1.95, 0.1, g);
-    box(0.14, 2.7, 0.16, M.gold, -0.82, 1.35, 0.08, g);
-    box(0.14, 2.7, 0.16, M.gold, 0.82, 1.35, 0.08, g);
-    box(1.78, 0.14, 0.16, M.gold, 0, 2.62, 0.08, g);
-    add(new THREE.CylinderGeometry(0.035, 0.035, 0.2, 10), M.gold, 0.55, 1.15, 0.16, g).rotation.x = Math.PI / 2;
-    box(0.2, 0.17, 0.06, M.gold, 0.55, 0.95, 0.15, g);
-    add(new THREE.TorusGeometry(0.06, 0.016, 8, 12, Math.PI), M.gold, 0.55, 1.03, 0.15, g);
-    const glowMat = track(new THREE.MeshBasicMaterial({ color: zone.color, transparent: true, opacity: 0.55 }));
-    add(new THREE.BoxGeometry(1.5, 0.03, 0.02), glowMat, 0, 0.02, 0.1, g, false);
-    add(new THREE.BoxGeometry(0.03, 2.5, 0.02), glowMat, -0.74, 1.25, 0.1, g, false);
-    add(new THREE.BoxGeometry(0.03, 2.5, 0.02), glowMat, 0.74, 1.25, 0.1, g, false);
-    const s = sign(zone.name, 2.4, 0.6, 0, 3.3, 0.12, 0, { color: '#ffffff', glow: hex, font: '700 96px Cinzel, serif' });
-    g.add(s);
-    interact({ id: `door:${d.zone}`, zone: d.zone, pos: new THREE.Vector3(d.x + (d.x < 0 ? 0.6 : -0.6), 1.2, d.z), radius: 2.3, prompt: { key: 'E', text: `Inspeccionar puerta · ${zone.name}` } });
+  function buildShopBeacon(ctx) {
+    const { kit, root, track } = ctx;
+    const x = COUNTER.x;
+    const z = COUNTER.front + 1.4;
+    const gem = new THREE.Mesh(track(new THREE.OctahedronGeometry(0.26, 0)), kit.make({ color: 0xffe9a8, emissive: 0xffb020, emissiveIntensity: 1.4, metal: 0.6, rough: 0.15 }));
+    gem.scale.set(1, 1.5, 1);
+    gem.position.set(x, 2.7, COUNTER.front - 0.3);
+    const halo = new THREE.Mesh(track(new THREE.PlaneGeometry(1.8, 1.8)), kit.basic({ map: glowTexture(), color: 0xffb020, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }));
+    halo.position.set(x, 2.7, COUNTER.front - 0.28);
+    const ring = new THREE.Mesh(track(new THREE.RingGeometry(1.15, 1.35, 48)), kit.basic({ color: 0xffb020, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(x, 0.016, z);
+    const disc = new THREE.Mesh(track(new THREE.CircleGeometry(1.15, 48)), kit.basic({ map: glowTexture(), color: 0xffb020, transparent: true, opacity: 0.25, blending: THREE.AdditiveBlending, depthWrite: false }));
+    disc.rotation.x = -Math.PI / 2;
+    disc.position.set(x, 0.015, z);
+    const arrow = new THREE.Mesh(track(new THREE.ConeGeometry(0.2, 0.45, 4)), kit.make({ color: 0xffe9a8, emissive: 0xffb020, emissiveIntensity: 1.2 }));
+    arrow.rotation.x = Math.PI;
+    arrow.position.set(x, 2.2, COUNTER.front + 0.7);
+    arrow.visible = false;
+    root.add(gem, halo, ring, disc, arrow);
+    return { gem, halo, ring, disc, arrow };
   }
 
-  // ---------- puerta del Ala norte ----------
-  const wingDoor = new THREE.Group();
-  wingDoor.position.set(0, 0, -7.98);
-  scene.add(wingDoor);
-  box(3.0, 2.8, 0.1, M.carbon, 0, 1.4, 0, wingDoor);
-  for (const s of [-1, 1]) {
-    box(1.2, 2.2, 0.03, M.wood, s * 0.72, 1.4, 0.07, wingDoor);
-    box(0.06, 2.6, 0.04, M.gold, s * 0.06, 1.4, 0.09, wingDoor);
-    add(new THREE.SphereGeometry(0.06, 12, 8), M.gold, s * 0.22, 1.3, 0.12, wingDoor);
-  }
-  box(3.2, 0.12, 0.2, M.gold, 0, 2.86, 0.02, wingDoor);
-  box(0.12, 2.86, 0.2, M.gold, -1.6, 1.43, 0.02, wingDoor);
-  box(0.12, 2.86, 0.2, M.gold, 1.6, 1.43, 0.02, wingDoor);
-  const wingCollider = collide(0, -8.1, 3.2, 0.6);
-  sign('HOUSE OF ODDS', 5.8, 1.45, 0, 3.7, -7.96, 0, { color: '#fff3c4', glow: '#d4af37', font: '700 118px Cinzel, serif' });
-  const wingInteract = interact({ id: 'wing', pos: new THREE.Vector3(0, 1.2, -7.2), radius: 2.4, prompt: { key: 'E', text: 'Inspeccionar puerta · ALA NORTE' } });
-
-  // ---------- Ala norte (visible tras ampliar) ----------
-  const wing = new THREE.Group();
-  wing.visible = false;
-  scene.add(wing);
-  const wf = add(new THREE.PlaneGeometry(10.4, 8.4), M.floor, 0, 0.002, -12.2, wing, false);
-  wf.rotation.x = -Math.PI / 2;
-  wf.material = track(new THREE.MeshStandardMaterial({ map: track(marbleTexture(512, [10.4 / 2.4, 8.4 / 2.4])), roughness: 0.2, metalness: 0.2, envMapIntensity: 1.1 }));
-  add(new THREE.PlaneGeometry(10.4, 8.4), M.ceiling, 0, H, -12.2, wing, false).rotation.x = Math.PI / 2;
-  box(0.4, H, 8.4, wallMat(3.5, 2), -5.2, H / 2, -12.2, wing);
-  box(0.4, H, 8.4, wallMat(3.5, 2), 5.2, H / 2, -12.2, wing);
-  box(10.8, H, 0.4, wallMat(4.5, 2), 0, H / 2, -16.6, wing);
-  collide(-5.2, -12.2, 0.4, 8.4);
-  collide(5.2, -12.2, 0.4, 8.4);
-  collide(0, -16.6, 10.8, 0.4);
-  const sofa = (x, z, ry, parent) => {
-    const g = new THREE.Group();
-    g.position.set(x, 0, z);
-    g.rotation.y = ry;
-    parent.add(g);
-    box(2.2, 0.4, 0.9, M.velvet, 0, 0.35, 0, g);
-    box(2.2, 0.55, 0.22, M.velvet, 0, 0.8, -0.36, g);
-    box(0.2, 0.55, 0.9, M.velvet, -1.1, 0.55, 0, g);
-    box(0.2, 0.55, 0.9, M.velvet, 1.1, 0.55, 0, g);
-    for (const sx of [-1, 1]) for (const sz of [-1, 1]) box(0.06, 0.14, 0.06, M.gold, sx * 1.0, 0.07, sz * 0.38, g);
-  };
-  sofa(-2.6, -15.4, 0, wing);
-  sofa(2.6, -15.4, 0, wing);
-  sofa(-4.0, -12.2, Math.PI / 2, wing);
-  sofa(4.0, -12.2, -Math.PI / 2, wing);
-  collide(-2.6, -15.4, 2.3, 1.0);
-  collide(2.6, -15.4, 2.3, 1.0);
-  collide(-4.0, -12.2, 1.0, 2.3);
-  collide(4.0, -12.2, 1.0, 2.3);
-  add(new THREE.CylinderGeometry(0.8, 0.8, 0.5, 28), M.marble, 0, 0.25, -12.8, wing);
-  add(new THREE.TorusGeometry(0.8, 0.03, 8, 28), M.gold, 0, 0.5, -12.8, wing).rotation.x = Math.PI / 2;
-  collide(0, -12.8, 1.7, 1.7);
-  const wingArt = new THREE.Mesh(track(new THREE.PlaneGeometry(2.0, 2.6)), track(new THREE.MeshStandardMaterial({ map: track(paintingTexture('wing-a')), emissiveMap: track(paintingTexture('wing-a')), emissive: 0x888888, roughness: 0.6 })));
-  wingArt.position.set(0, 2.0, -16.38);
-  wing.add(wingArt);
-  const wingSign = sign('SALÓN DE ESPERA', 3.8, 0.95, 0, 3.9, -16.38, 0, { color: '#ffe9a8', glow: '#d4af37', font: '700 92px Cinzel, serif', sub: 'ALA NORTE' });
-  wing.add(wingSign);
-  const wingLight = new THREE.PointLight(0xffc680, 0, 16, 2);
-  wingLight.position.set(0, 3.4, -12.5);
-  scene.add(wingLight);
-
-  // ---------- cuadros, sofás y lámparas de la sala ----------
-  const frame = (x, z, ry, seed) => {
-    const g = new THREE.Group();
-    g.position.set(x, 2.25, z);
-    g.rotation.y = ry;
-    scene.add(g);
-    box(1.7, 2.2, 0.08, M.gold, 0, 0, 0, g);
-    const t = track(paintingTexture(seed));
-    const art = new THREE.Mesh(track(new THREE.PlaneGeometry(1.5, 2.0)), track(new THREE.MeshStandardMaterial({ map: t, emissiveMap: t, emissive: 0x777777, roughness: 0.6 })));
-    art.position.z = 0.05;
-    g.add(art);
-  };
-  frame(-8.95, 0, Math.PI / 2, 'art-1');
-  frame(8.95, 0, -Math.PI / 2, 'art-2');
-  frame(-4.5, 7.95, Math.PI, 'art-3');
-  frame(4.5, 7.95, Math.PI, 'art-4');
-  for (const x of [-2.2, 2.2]) {
-    sofa(x, 7.2, Math.PI, scene);
-    collide(x, 7.2, 2.3, 1.0);
-  }
-  for (const x of [-5.4, 5.4]) {
-    add(new THREE.CylinderGeometry(0.3, 0.3, 0.7, 20), M.marble, x, 0.35, 7.2);
-    add(new THREE.CylinderGeometry(0.03, 0.05, 0.4, 8), M.gold, x, 0.9, 7.2);
-    add(new THREE.CylinderGeometry(0.15, 0.24, 0.3, 14, 1, true), M.amber, x, 1.2, 7.2, scene, false);
-    collide(x, 7.2, 0.7, 0.7);
+  function buildDoors(ctx, sign) {
+    const { H, M, kit, root, track } = ctx;
+    const out = { wing: null, wingCollider: null, wingInteract: null };
+    for (const door of DOORS) {
+      const p = doorPlacement(door);
+      const A = ctx.B.at({ x: p.x, z: p.z, yaw: p.yaw });
+      const zone = door.zone ? ZONES[door.zone] : null;
+      const glow = zone ? kit.make({ color: 0x000000, emissive: zone.color, emissiveIntensity: 1.4 }) : null;
+      doorFrame(ctx, A, door.width, { glow });
+      const along = door.wall === 'north' || door.wall === 'south';
+      const leafW = door.width / 2 - 0.02;
+      if (door.id === 'wing') {
+        // puerta doble dinámica: sube al ampliar
+        const grp = new THREE.Group();
+        grp.position.set(p.x, 0, p.z);
+        grp.rotation.y = p.yaw;
+        const b = new Batch();
+        for (const s of [-1, 1]) {
+          H.box(b, M.woodDark([1, 1]), leafW, DOOR_H - 0.04, 0.08, s * (leafW / 2 + 0.01), (DOOR_H - 0.04) / 2, 0.0, { r: 0.012 });
+          H.box(b, M.wood([1, 1]), leafW - 0.3, 1.0, 0.03, s * (leafW / 2 + 0.01), 0.8, 0.05, { r: 0.008 });
+          H.box(b, M.wood([1, 1]), leafW - 0.3, 1.2, 0.03, s * (leafW / 2 + 0.01), 2.1, 0.05, { r: 0.008 });
+          H.cyl(b, M.gold, 0.02, 0.02, 0.5, s * 0.14, 1.3, 0.09, { segments: 8 });
+        }
+        b.build(grp);
+        root.add(grp);
+        out.wing = grp;
+        out.wingCollider = ctx.addCollider(p.x, p.z + 0.1, door.width + 0.2, 0.5);
+        out.wingInteract = { id: 'wing', pos: new THREE.Vector3(p.x, 1.2, p.z + 0.9), radius: 2.6, prompt: { key: 'E', textKey: 'prompt.wing' } };
+        interactables.push(out.wingInteract);
+        continue;
+      }
+      // puertas de zona y entrada: dobles, cerradas
+      for (const s of [-1, 1]) {
+        H.box(A, M.woodDark([1, 1]), leafW, DOOR_H - 0.04, 0.08, s * (leafW / 2 + 0.01), (DOOR_H - 0.04) / 2, -0.02, { r: 0.012 });
+        H.box(A, M.wood([1, 1]), leafW - 0.26, 0.9, 0.03, s * (leafW / 2 + 0.01), 0.75, 0.035, { r: 0.008 });
+        H.box(A, M.wood([1, 1]), leafW - 0.26, 1.2, 0.03, s * (leafW / 2 + 0.01), 2.05, 0.035, { r: 0.008 });
+        H.cyl(A, M.gold, 0.02, 0.02, 0.42, s * 0.12, 1.25, 0.06, { segments: 8 });
+      }
+      const gap = along ? { w: door.width + 0.2, d: 0.6 } : { w: 0.6, d: door.width + 0.2 };
+      ctx.addCollider(p.x, p.z, gap.w, gap.d);
+      if (zone) {
+        const hex = `#${zone.color.toString(16).padStart(6, '0')}`;
+        const s = sign(() => t(`zone.${zone.id}`), 2.6, 0.65, 0, 3.55, 0.14, 0, { color: '#ffffff', glow: hex, font: '700 96px Cinzel, serif' }, root);
+        const holder = new THREE.Group();
+        holder.position.set(p.x, 0, p.z);
+        holder.rotation.y = p.yaw;
+        root.add(holder);
+        holder.add(s.mesh);
+        // candado luminoso
+        const lock = new THREE.Mesh(track(new THREE.CircleGeometry(0.11, 24)), kit.basic({ color: 0xff3048 }));
+        lock.position.set(0, 1.62, 0.07);
+        holder.add(lock);
+        interactables.push({ id: `door:${door.zone}`, zone: door.zone, pos: new THREE.Vector3(p.x + p.inward.x * 0.8, 1.2, p.z + p.inward.z * 0.8), radius: 2.4, prompt: { key: 'E', textKey: 'prompt.door', params: { zone: t(`zone.${door.zone}`) } } });
+      } else if (door.id === 'entrance') {
+        // cartel colgado de «CERRADO»
+        const holder = new THREE.Group();
+        holder.position.set(p.x, 0, p.z);
+        holder.rotation.y = p.yaw;
+        root.add(holder);
+        const s = sign(() => t('sign.closed'), 1.5, 0.38, 0, 1.75, 0.09, 0, { color: '#ffdede', glow: '#c42240', font: '700 120px Cinzel, serif' }, holder);
+        s.closedSign = true;
+        const mat = ctx.B.at({ x: p.x, z: p.z + p.inward.z * 1.0, yaw: p.yaw });
+        H.box(mat, kit.make({ color: 0x241612, rough: 1, dirt: 'hall' }), 2.4, 0.015, 1.2, 0, 0.008, 0, { r: 0 });
+      }
+    }
+    return out;
   }
 
-  // ---------- extras desbloqueables ----------
-  const carpet = new THREE.Mesh(track(new THREE.PlaneGeometry(3, 9)), track(new THREE.MeshStandardMaterial({ map: track(carpetTexture()), roughness: 1 })));
-  carpet.rotation.x = -Math.PI / 2;
-  carpet.position.set(0, 0.012, 3.1);
-  carpet.receiveShadow = true;
-  carpet.visible = false;
-  scene.add(carpet);
-
-  const statue = new THREE.Group();
-  statue.position.set(5.2, 0, 5.4);
-  statue.visible = false;
-  scene.add(statue);
-  box(0.9, 0.9, 0.9, M.marble, 0, 0.45, 0, statue);
-  box(1.0, 0.08, 1.0, M.gold, 0, 0.94, 0, statue);
-  const profile = [[0.0, 0], [0.3, 0], [0.34, 0.25], [0.22, 0.8], [0.17, 1.1], [0.1, 1.25], [0.0, 1.3]].map(([x, y]) => new THREE.Vector2(x, y));
-  add(new THREE.LatheGeometry(profile, 20), M.gold, 0, 0.98, 0, statue);
-  add(new THREE.SphereGeometry(0.11, 16, 12), M.gold, 0, 2.38, 0, statue);
-  add(new THREE.TorusGeometry(0.2, 0.012, 8, 28), M.gold, 0, 2.4, -0.1, statue, false);
-  const arm = add(new THREE.CylinderGeometry(0.04, 0.05, 0.5, 8), M.gold, 0.22, 2.15, 0, statue);
-  arm.rotation.z = -0.9;
-  const orb = add(new THREE.SphereGeometry(0.13, 18, 14), track(new THREE.MeshStandardMaterial({ color: 0xffe9a8, emissive: 0xffc23a, emissiveIntensity: 1.6 })), 0.45, 2.7, 0, statue, false);
-  collide(5.2, 5.4, 1.1, 1.1);
-
-  const chandelier = new THREE.Group();
-  chandelier.position.set(0, 3.55, -1.5);
-  chandelier.visible = false;
-  scene.add(chandelier);
-  add(new THREE.CylinderGeometry(0.012, 0.012, 1.1, 6), M.gold, 0, 0.55, 0, chandelier, false);
-  add(new THREE.TorusGeometry(1.0, 0.04, 10, 40), M.gold, 0, 0, 0, chandelier, false).rotation.x = Math.PI / 2;
-  add(new THREE.TorusGeometry(0.55, 0.03, 8, 32), M.gold, 0, 0.18, 0, chandelier, false).rotation.x = Math.PI / 2;
-  const crystalMat = track(new THREE.MeshStandardMaterial({ color: 0xdff8ff, emissive: 0x88a8b0, emissiveIntensity: 0.5, metalness: 0.4, roughness: 0.05 }));
-  const crystals = new THREE.InstancedMesh(track(new THREE.OctahedronGeometry(0.07, 0)), crystalMat, 48);
-  const dummy = new THREE.Object3D();
-  for (let i = 0; i < 48; i++) {
-    const a = (i / 48) * Math.PI * 2;
-    dummy.position.set(Math.cos(a) * 1.0, -0.18 - (i % 3) * 0.1, Math.sin(a) * 1.0);
-    dummy.scale.set(0.8, 1.6, 0.8);
-    dummy.updateMatrix();
-    crystals.setMatrixAt(i, dummy.matrix);
-  }
-  chandelier.add(crystals);
-  for (let i = 0; i < 8; i++) {
-    const a = (i / 8) * Math.PI * 2;
-    add(new THREE.SphereGeometry(0.06, 10, 8), M.candle, Math.cos(a) * 1.0, 0.1, Math.sin(a) * 1.0, chandelier, false);
-  }
-  const chandLight = new THREE.PointLight(0xffe0b0, 0, 12, 2);
-  chandLight.position.set(0, 3.4, -1.5);
-  scene.add(chandLight);
-
-  // ---------- iluminación ----------
-  const hemi = new THREE.HemisphereLight(0x3a2a2a, 0x050304, 0.35);
-  const spot = new THREE.SpotLight(0xfff0d8, 320, 14, 0.55, 0.7, 2);
-  spot.position.set(0, 4.3, 0.5);
-  spot.target.position.set(0, 1.2, -1.5);
-  spot.shadow.bias = -0.0004;
-  spot.shadow.normalBias = 0.02;
-  const fill = new THREE.PointLight(0xffd7a0, 40, 18, 2);
-  fill.position.set(0, 4.0, 3.5);
-  const redL = new THREE.PointLight(0xc42240, 28, 12, 2);
-  redL.position.set(-7.2, 2.6, 2.5);
-  const redR = redL.clone();
-  redR.position.set(7.2, 2.6, 2.5);
-  const goldL = new THREE.PointLight(0xd4af37, 25, 10, 2);
-  goldL.position.set(CX, 2.8, -5.5);
-  scene.add(hemi, spot, spot.target, fill, redL, redR, goldL);
-
-  // ---------- polvo ambiental ----------
-  const DUST = 140;
-  const dustPos = new Float32Array(DUST * 3);
-  const dustSeed = new Float32Array(DUST * 3);
-  for (let i = 0; i < DUST; i++) {
-    dustSeed.set([Math.random() * 16 - 8, 0.4 + Math.random() * 3.8, Math.random() * 14 - 7], i * 3);
-  }
-  const dustGeo = track(new THREE.BufferGeometry());
-  dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
-  const dust = new THREE.Points(dustGeo, track(new THREE.PointsMaterial({ size: 0.035, map: track(glowTexture()), color: 0xffe6b0, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false })));
-  dust.frustumCulled = false;
-  scene.add(dust);
-
-  // ---------- estado ----------
-  const state = { lighting: 0, expanded: false, wingOpen: 0, effects: true };
-
-  function setLighting(level) {
-    state.lighting = level;
-    spot.intensity = LIGHT_LEVELS.spot[level];
-    fill.intensity = LIGHT_LEVELS.fill[level];
-    redL.intensity = redR.intensity = LIGHT_LEVELS.red[level];
-    goldL.intensity = LIGHT_LEVELS.red[level] * 0.9;
-    M.cove.emissiveIntensity = LIGHT_LEVELS.cove[level];
-    hemi.intensity = 0.3 + level * 0.1;
+  /** Lámparas colgantes art déco: varilla de latón, florón, globo de cristal opalino y aro dorado. */
+  function buildPendants(ctx) {
+    const { H, M, kit } = ctx;
+    const opal = kit.make({ color: 0xfff4e4, emissive: 0xffd9a8, emissiveIntensity: 1.25, rough: 0.35 });
+    const flicker = kit.make({ color: 0xfff4e4, emissive: 0xffd9a8, emissiveIntensity: 1.25, rough: 0.35 });
+    const dead = kit.make({ color: 0x8a8278, emissive: 0xffd9a8, emissiveIntensity: 0, rough: 0.4 });
+    const xs = [-8, -4, 4, 8];
+    const zs = [-8.8, 0, 8.8];
+    const list = [];
+    let i = 0;
+    for (const z of zs) {
+      for (const x of xs) {
+        const A = ctx.B.at({ x, z });
+        const top = HALL.height;
+        const drop = 1.35;
+        H.cyl(A, M.brass, 0.09, 0.07, 0.05, 0, top - 0.03, 0, { segments: 16 });
+        H.cyl(A, M.brass, 0.008, 0.008, drop, 0, top - drop / 2, 0, { segments: 6 });
+        H.lathe(A, M.brass, [[0.02, 0.1], [0.07, 0.08], [0.1, 0.03], [0.1, 0.0], [0.03, 0.0]], 0, top - drop - 0.06, 0, { segments: 20 });
+        const kind = i === 6 ? 'flicker' : i === 9 ? 'dead' : 'alive';
+        H.sphere(A, kind === 'flicker' ? flicker : kind === 'dead' ? dead : opal, 0.17, 0, top - drop - 0.2, 0, { segments: 20 });
+        H.torus(A, M.gold, 0.172, 0.008, 0, top - drop - 0.2, 0, { segments: 32 });
+        list.push({ x, y: top - drop - 0.2, z, kind });
+        i++;
+      }
+    }
+    return { list, flicker, opal, dead };
   }
 
-  /** Refleja en el escenario lo que el jugador ha comprado. `silent=false` anima la apertura del ala. */
+  /** Cuelga una lámpara real del techo con su vástago de latón (y la enciende: sus bombillas brillan). */
+  function hangChandelier(ctx, name, { x, z, scale = 1, bottom = 3.2, ceiling = HALL.height, parent = ctx.root }) {
+    const lamp = placeProp(ctx, name, { x, z, y: bottom, scale });
+    if (!lamp) return null;
+    lamp.removeFromParent();
+    parent.add(lamp);
+    const size = lamp.userData.size?.y ?? 1;
+    const top = bottom + size * scale;
+    const rod = new THREE.Mesh(ctx.track(new THREE.CylinderGeometry(0.012, 0.012, Math.max(0.05, ceiling - top), 8)), ctx.M.brass);
+    rod.position.set(x, (top + ceiling) / 2, z);
+    parent.add(rod);
+    lamp.traverse((o) => {
+      if (!o.isMesh) return;
+      o.castShadow = false;
+      // bombillas/pantallas: luz propia cálida (la luz real la ponen las luces de la sala)
+      o.material = [].concat(o.material).map((m) => {
+        if (!/lamp|bulb|shade|glass/i.test(m.name)) return m;
+        const c = m.clone();
+        c.emissive = new THREE.Color(0xffd29a);
+        c.emissiveIntensity = /glass/i.test(m.name) ? 0.25 : 0.9;
+        c.emissiveMap = c.map;
+        ctx.track(c);
+        return c;
+      });
+      if (o.material.length === 1) o.material = o.material[0];
+    });
+    return lamp;
+  }
+
+  function buildWing(ctx, sign) {
+    const { H, M, kit, root, track } = ctx;
+    const grp = new THREE.Group();
+    grp.visible = false;
+    root.add(grp);
+    const w = NORTH_WING.maxX - NORTH_WING.minX;
+    const d = NORTH_WING.maxZ - NORTH_WING.minZ;
+    const cz = (NORTH_WING.minZ + NORTH_WING.maxZ) / 2;
+    const b = new Batch();
+    b.add(tiledPlane(w, d, 2.4), M.floor([1, 1]), { y: 0.001, z: cz, rx: -Math.PI / 2 });
+    b.add(tiledPlane(w, d, 3), M.ceiling, { y: NORTH_WING.height, z: cz, rx: Math.PI / 2 });
+    const wall = M.wall([1, 1]);
+    b.add(tiledBox(0.4, NORTH_WING.height, d, 2.4), wall, { x: NORTH_WING.minX - 0.2, y: NORTH_WING.height / 2, z: cz });
+    b.add(tiledBox(0.4, NORTH_WING.height, d, 2.4), wall, { x: NORTH_WING.maxX + 0.2, y: NORTH_WING.height / 2, z: cz });
+    b.add(tiledBox(w + 0.8, NORTH_WING.height, 0.4, 2.4), wall, { x: 0, y: NORTH_WING.height / 2, z: NORTH_WING.minZ - 0.2 });
+    // relleno entre el muro norte del salón y los muros del ala
+    for (const s of [-1, 1]) b.add(tiledBox(Math.abs(NORTH_WING.maxX) - 2 + 0.2, NORTH_WING.height, 0.4, 2.4), wall, { x: s * ((NORTH_WING.maxX + 2) / 2), y: NORTH_WING.height / 2, z: HALL.minZ - 0.6 });
+    const zSofa = NORTH_WING.minZ + 1.6;
+    const real = (name, o) => {
+      const g = placeProp(ctx, name, o);
+      if (g) {
+        g.removeFromParent();
+        grp.add(g);
+      }
+      return g;
+    };
+    const sofaAt = (x, z, yaw) => real('sofa', { x, z, yaw }) || sofa(ctx, b.at({ x, z, yaw }));
+    for (const x of [-3.9, -2.1, 2.1, 3.9]) sofaAt(x, zSofa, 0);
+    sofaAt(-7.4, cz - 0.8, Math.PI / 2);
+    sofaAt(-7.4, cz + 0.8, Math.PI / 2);
+    sofaAt(7.4, cz - 0.8, -Math.PI / 2);
+    sofaAt(7.4, cz + 0.8, -Math.PI / 2);
+    if (!real('coffee_table', { x: 0, z: cz })) coffeeTable(ctx, b.at({ x: 0, z: cz }));
+    for (const x of [-5.6, 5.6]) {
+      if (real('console', { x, z: NORTH_WING.minZ + 0.32 })) real('brass_vase', { x, y: 0.95, z: NORTH_WING.minZ + 0.32, scale: 0.9 });
+    }
+    hangChandelier(ctx, 'chandelier_03', { x: 0, z: cz, scale: 1.6, bottom: 3.0, ceiling: NORTH_WING.height, parent: grp });
+    for (const x of [-8.2, 8.2]) plant(ctx, b.at({ x, z: NORTH_WING.minZ + 0.7 }), { height: 1.4 });
+    b.build(grp, { cast: ctx.g.shadows });
+    // colisionadores del ala (no estorban mientras está cerrada: quedan fuera de los límites)
+    ctx.addCollider(NORTH_WING.minX - 0.2, cz, 0.4, d);
+    ctx.addCollider(NORTH_WING.maxX + 0.2, cz, 0.4, d);
+    ctx.addCollider(0, NORTH_WING.minZ - 0.2, w + 0.8, 0.4);
+    ctx.addCollider(-3, zSofa, 3.4, 0.8);
+    ctx.addCollider(3, zSofa, 3.4, 0.8);
+    ctx.addCollider(-7.4, cz, 0.8, 3.2);
+    ctx.addCollider(7.4, cz, 0.8, 3.2);
+    ctx.addCollider(0, cz, 1.3, 1.3);
+    // dos plazas por sofá
+    const seats = [];
+    for (const x of [-3.9, -2.1, 2.1, 3.9]) for (const dx of [-0.39, 0.39]) seats.push([x + dx, zSofa + 0.05, 0]);
+    for (const [sx, yaw] of [[-1, Math.PI / 2], [1, -Math.PI / 2]]) for (const z of [cz - 0.8, cz + 0.8]) for (const dz of [-0.39, 0.39]) seats.push([sx * 7.35, z + dz, yaw]);
+    for (const [x, z, yaw] of seats) anchors.push({ type: 'sofa', x, z, yaw, sitY: 0.44, area: 'wing' });
+    const art = painting(ctx, { x: 0, y: 2.6, z: NORTH_WING.minZ + 0.06, yaw: 0, seed: 'wing-a', w: 2.0, h: 2.6 });
+    grp.add(art);
+    const s = sign(() => t('sign.wing'), 3.8, 0.95, 0, 4.4, NORTH_WING.minZ + 0.08, 0, { color: '#ffe9a8', glow: '#d4af37', font: '700 92px Cinzel, serif', sub: () => t('sign.wingSub') }, grp);
+    void s;
+    void kit;
+    void track;
+    return { group: grp };
+  }
+
+  /**
+   * Iluminación. La MISMA luz en todas las calidades: el casino tiene ~25 luces; las calidades bajas no se
+   * las quitan (eso las oscurecía), sino que las AGRUPAN: cada grupo de luces cercanas se sustituye por una
+   * sola luz en su centro con la potencia de todas. Menos luces = más rápido, pero la misma energía y casi la
+   * misma distribución. Además, la sonda de entorno se captura con las mismas luces que se dibujan (sin
+   * variantes de shader extra: menos compilación al cargar o cambiar de calidad).
+   */
+  function buildLights(ctx, { pendants, machine }) {
+    const { g, root } = ctx;
+    const budget = Math.max(4, g.dynamicLights);
+    const all = [];
+
+    const hemi = new THREE.HemisphereLight(0xffe2c4, 0x2a1810, 0.32);
+    root.add(hemi);
+    const ambient = new THREE.AmbientLight(0x3a2a22, 0.1);
+    root.add(ambient);
+
+    const spot = new THREE.SpotLight(0xfff0d8, 260, 16, 0.42, 0.6, 2);
+    spot.position.set(CLASSIC.x, HALL.height - 0.25, CLASSIC.z + 2.6);
+    spot.target.position.set(CLASSIC.x, 1.2, CLASSIC.z);
+    spot.shadow.bias = -0.0004;
+    spot.shadow.normalBias = 0.02;
+    spot.castShadow = g.shadows;
+    if (g.shadows) spot.shadow.mapSize.set(g.shadowMapSize, g.shadowMapSize);
+    root.add(spot, spot.target);
+    all.push({ light: spot, base: 260, kind: 'key' });
+
+    const make = (color, intensity, dist, x, y, z, kind) => {
+      const l = new THREE.PointLight(color, intensity, dist, 2);
+      l.position.set(x, y, z);
+      root.add(l);
+      const e = { light: l, base: intensity, kind };
+      all.push(e);
+      return e;
+    };
+    // luces fijas (se encienden/apagan solas o laten): siempre propias
+    const counter = make(0xffc890, 70, 11, COUNTER.x, 2.9, COUNTER.front + 0.6, 'counter');
+    const wingLight = make(0xffc680, 0, 18, 0, 3.8, -17, 'wing');
+    const chandLight = make(0xffe0b0, 0, 12, CLASSIC.x, 4.0, CLASSIC.z, 'chandelier');
+    // luces de ambiente: se agrupan si no caben en el presupuesto de la calidad
+    const specs = [
+      [0xffd8b0, 70, 11, RECEPTION.x - 0.6, 3.0, RECEPTION.z - 1.6, 'area'],
+      [0xffe6c8, 95, 14, 6.5, 3.8, -6.5, 'area'],
+      [0xffe6c8, 95, 14, -6.5, 3.8, -3.5, 'area'],
+      [0xffdcb8, 95, 15, 0, 3.8, 6.5, 'area'],
+      [0xffe0c0, 60, 9, 12.2, 3.2, 0.9, 'area'],
+      [0xffbf80, 60, 10, -11.6, 2.6, 8.2, 'lounge'],
+      [0xffd6a8, 70, 12, 6.5, 3.8, 4.6, 'area'],
+      [0xffd6a8, 70, 12, -6.5, 3.8, 4.6, 'area'],
+      [0xffd0a0, 55, 12, -11, 3.8, -7, 'area'],
+      [0xffd0a0, 55, 12, 11, 3.8, -2, 'area'],
+    ];
+    for (const p of pendants.list) {
+      if (p.kind === 'dead') continue;
+      specs.push([0xffd9a8, 22, 7, p.x, p.y - 0.2, p.z, p.kind === 'flicker' ? 'flicker' : 'pendant']);
+    }
+    const room = budget - 4; // foco, mostrador, ala y lámpara de araña
+    if (specs.length <= room) for (const sp of specs) make(...sp);
+    else for (const c of clusterLights(specs, room)) make(c.color, c.intensity, c.dist, c.x, c.y, c.z, 'cluster');
+    void machine;
+    // grupo vacío por compatibilidad (antes había luces «solo sonda»)
+    const probeOnly = new THREE.Group();
+    hemi.userData.base = 0.32;
+    ambient.userData.base = ambient.intensity;
+    return {
+      all, spot, hemi, ambient, counter, wingLight, chandLight, probeOnly, missing: 0,
+      dispose() {
+        spot.shadow.map?.dispose();
+      },
+    };
+  }
+
+  /**
+   * Agrupa luces puntuales en `k` luces (k-medias ponderado por potencia, determinista): cada grupo da una
+   * luz en su centro de potencia, con la potencia total, el color medio y el alcance que cubre a todas.
+   */
+  function clusterLights(specs, k) {
+    const pts = specs.map(([color, intensity, dist, x, y, z]) => ({ color: new THREE.Color(color), intensity, dist, x, y, z }));
+    k = Math.max(1, Math.min(k, pts.length));
+    // semillas: la más potente y luego la más lejana a las ya elegidas
+    const centers = [{ ...pts.reduce((a, b) => (b.intensity > a.intensity ? b : a)) }];
+    while (centers.length < k) {
+      let best = null;
+      let bestD = -1;
+      for (const p of pts) {
+        const d = Math.min(...centers.map((c) => (p.x - c.x) ** 2 + (p.z - c.z) ** 2));
+        if (d * p.intensity > bestD) {
+          bestD = d * p.intensity;
+          best = p;
+        }
+      }
+      centers.push({ ...best });
+    }
+    let groups = [];
+    for (let it = 0; it < 8; it++) {
+      groups = centers.map(() => []);
+      for (const p of pts) {
+        let bi = 0;
+        let bd = Infinity;
+        centers.forEach((c, i) => {
+          const d = (p.x - c.x) ** 2 + (p.z - c.z) ** 2;
+          if (d < bd) {
+            bd = d;
+            bi = i;
+          }
+        });
+        groups[bi].push(p);
+      }
+      groups.forEach((gr, i) => {
+        if (!gr.length) return;
+        const w = gr.reduce((a, p) => a + p.intensity, 0);
+        centers[i].x = gr.reduce((a, p) => a + p.x * p.intensity, 0) / w;
+        centers[i].z = gr.reduce((a, p) => a + p.z * p.intensity, 0) / w;
+      });
+    }
+    return groups.filter((gr) => gr.length).map((gr) => {
+      const w = gr.reduce((a, p) => a + p.intensity, 0);
+      const x = gr.reduce((a, p) => a + p.x * p.intensity, 0) / w;
+      const y = gr.reduce((a, p) => a + p.y * p.intensity, 0) / w;
+      const z = gr.reduce((a, p) => a + p.z * p.intensity, 0) / w;
+      const color = new THREE.Color(0, 0, 0);
+      for (const p of gr) color.add(p.color.clone().multiplyScalar(p.intensity / w));
+      const dist = Math.max(...gr.map((p) => p.dist + Math.hypot(p.x - x, p.z - z)));
+      return { color, intensity: w, dist, x, y, z };
+    });
+  }
+
+  // ======================================================================== sonda de entorno
+  let probe = null;
+  let probeSig = '';
+  let probeDirty = 0;
+  /**
+   * Captura el casino en un cubemap desde el centro de la sala y lo convierte (PMREM) en el entorno de
+   * la escena: reflejos coherentes y luz indirecta. Se repite al cambiar la iluminación o la limpieza.
+   */
+  function captureProbe() {
+    if (!B) return;
+    const size = state.g.textureSize >= 1024 ? 256 : 128;
+    const cubeRT = new THREE.WebGLCubeRenderTarget(size, { type: THREE.HalfFloatType });
+    const cam = new THREE.CubeCamera(0.1, 80, cubeRT);
+    cam.position.set(0, 2.3, 2.0);
+    const hidden = [];
+    scene.traverse((o) => {
+      if ((o.isPoints || o.userData.noProbe) && o.visible) {
+        hidden.push(o);
+        o.visible = false;
+      }
+    });
+    const prevEnv = scene.environment;
+    scene.environment = null;
+    const prevFog = scene.fog;
+    scene.fog = null;
+    cam.update(renderer, scene);
+    scene.fog = prevFog;
+    for (const o of hidden) o.visible = true;
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    const next = pmrem.fromCubemap(cubeRT.texture);
+    pmrem.dispose();
+    cubeRT.dispose();
+    probe?.dispose();
+    probe = next;
+    scene.environment = probe.texture;
+    void prevEnv;
+    calibrateExposure();
+  }
+
+  // ======================================================================== exposición
+  /** Exposición fija: con la luz agrupada todas las calidades reciben la misma energía. */
+  const BASE_EXPOSURE = 0.9;
+  function calibrateExposure() {
+    renderer.toneMappingExposure = BASE_EXPOSURE;
+  }
+
+  function buildDust(ctx) {
+    const { g, root, kit, track } = ctx;
+    const count = Math.round(260 * g.particleScale);
+    const pos = new Float32Array(count * 3);
+    const seed = new Float32Array(count * 3);
+    for (let i = 0; i < count; i++) seed.set([Math.random() * 26 - 13, 0.4 + Math.random() * 4.6, Math.random() * 20 - 10], i * 3);
+    const geo = track(new THREE.BufferGeometry());
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    const mat = track(new THREE.PointsMaterial({ size: 0.04, map: glowTexture(), color: 0xffe6b0, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false }));
+    const points = new THREE.Points(geo, mat);
+    points.frustumCulled = false;
+    points.visible = g.effects && count > 0;
+    root.add(points);
+    void kit;
+    return { points, pos, seed, count, mat };
+  }
+
+  // ======================================================================== estado → escena
+
+  /** `f`: factor momentáneo (parpadeo al dar la luz); no cambia el estado guardado. */
+  function applyLighting(f = 1) {
+    if (!B) return;
+    const level = state.loadout?.lighting ?? 0;
+    const d = dirt.hall.value;
+    const k = LIGHT_LEVELS[level] * (0.82 + 0.18 * (1 - d));
+    state.lightK = k;
+    for (const e of B.lights.all) {
+      if (e.kind === 'wing' || e.kind === 'chandelier') continue;
+      e.light.intensity = e.base * k * f;
+    }
+    if (B.lights.ambient.userData.base === undefined) B.lights.ambient.userData.base = B.lights.ambient.intensity;
+    B.lights.ambient.intensity = B.lights.ambient.userData.base * (0.4 + 0.84 * k);
+    B.lights.hemi.intensity = (B.lights.hemi.userData.base ??= B.lights.hemi.intensity) * (0.56 + 0.72 * k);
+    // la luz indirecta (sonda) se vuelve a capturar cuando cambia algo que se note
+    scene.environmentIntensity = 1;
+    const sig = `${level}|${Math.round(d * 3)}|${state.expanded ? 1 : 0}|${state.loadout?.chandelier ? 1 : 0}|${state.story?.powered ? 1 : 0}`;
+    if (sig !== probeSig) {
+      probeSig = sig;
+      probeDirty = 0.35;
+    }
+    // luminarias: con la instalación vieja apenas lucen; al repararla se encienden todas (las fundidas también)
+    const glow = GLOW_LEVELS[level];
+    // las máquinas de la sala se encienden cuando vuelve la luz
+    setSlotsLit(B.ctx, level > 0 && f > 0.5);
+    const em = (m, on = true) => {
+      if (!m) return;
+      m.userData.eBase ??= m.emissiveIntensity || 1.4;
+      m.emissiveIntensity = on ? m.userData.eBase * glow * f : 0;
+    };
+    const P = B.ctx.M;
+    em(P.cove);
+    em(P.downlight);
+    em(P.bulb);
+    em(B.pendants.opal);
+    if (!B.pendants.dead.userData.eBase) B.pendants.dead.userData.eBase = 1.25;
+    if (!P.sconceDead.userData.eBase) P.sconceDead.userData.eBase = 1.6;
+    em(B.pendants.dead, level > 0);
+    em(P.sconceDead, level > 0);
+    B.pendants.flicker.userData.eBase = 1.25 * glow;
+    // luces que solo existen tras una compra: apagadas no cuestan nada (no entran en los shaders)
+    if (B.lights.wingLight) {
+      B.lights.wingLight.light.intensity = state.expanded ? 70 * k : 0;
+      B.lights.wingLight.light.visible = !!state.expanded;
+    }
+    if (B.lights.chandLight) {
+      B.lights.chandLight.light.intensity = state.loadout?.chandelier ? 70 : 0;
+      B.lights.chandLight.light.visible = !!state.loadout?.chandelier;
+    }
+    scene.fog.density = 0.014 + d * 0.012;
+  }
+
+  /** Refleja en el escenario lo que el jugador ha comprado. `animate` hace las transiciones visibles. */
   function applyProgress(loadout, { animate = false } = {}) {
-    setLighting(loadout.lighting);
-    carpet.visible = loadout.carpet;
-    statue.visible = loadout.statue;
-    chandelier.visible = loadout.chandelier;
-    chandLight.intensity = loadout.chandelier ? 60 : 0;
-    machine.applyLoadout(loadout);
-    if (loadout.expanded && !state.expanded) {
+    state.loadout = loadout;
+    const clean = Math.max(0, Math.min(1, loadout.clean ?? 0));
+    state.dirtTarget = 1 - clean;
+    if (!animate) dirt.hall.value = state.dirtTarget;
+    applyToBuild({ animate });
+  }
+
+  function applyToBuild({ animate = false } = {}) {
+    if (!B || !state.loadout) return;
+    const L = state.loadout;
+    B.carpet.mesh.visible = B.carpet.trim.visible = !!L.carpet;
+    B.statue.group.visible = !!L.statue;
+    B.statue.collider.enabled = !!L.statue;
+    B.chandelier.group.visible = !!L.chandelier;
+    for (const [id, set] of B.decorSets) {
+      const on = (L.decorSets ?? []).includes(id);
+      set.group.visible = on;
+      for (const c of set.colliders) c.enabled = on;
+    }
+    B.machine.applyLoadout(L);
+    const wantOpen = !!L.expanded;
+    const d = B.doorObjects;
+    if (wantOpen && !state.expanded) {
       state.expanded = true;
-      wing.visible = true;
-      wingLight.intensity = 55;
-      wingCollider.enabled = false;
-      wingInteract.enabled = false;
+      B.wing.group.visible = true;
+      d.wingCollider.enabled = false;
+      d.wingInteract.enabled = false;
+      Object.assign(bounds, playerBounds(true));
       if (animate) state.wingOpen = 0.0001;
-      else { state.wingOpen = 1; wingDoor.visible = false; }
-    } else if (!loadout.expanded) {
+      else {
+        state.wingOpen = 1;
+        d.wing.visible = false;
+      }
+    } else if (wantOpen) {
+      // reconstrucción con el ala ya abierta
+      B.wing.group.visible = true;
+      d.wingCollider.enabled = false;
+      d.wingInteract.enabled = false;
+      d.wing.visible = state.wingOpen < 1;
+    } else {
       state.expanded = false;
-      wing.visible = false;
-      wingLight.intensity = 0;
-      wingCollider.enabled = true;
-      wingInteract.enabled = true;
       state.wingOpen = 0;
-      wingDoor.visible = true;
-      wingDoor.position.y = 0;
+      B.wing.group.visible = false;
+      d.wingCollider.enabled = true;
+      d.wingInteract.enabled = true;
+      d.wing.visible = true;
+      d.wing.position.y = 0;
+      Object.assign(bounds, playerBounds(false));
+    }
+    applyStory();
+    applyLighting();
+    updateDirtVisuals(0, true);
+  }
+
+  /** Suciedad → opacidad de manchas, trastos retirados, neón y cuadros enderezados. */
+  function updateDirtVisuals(dt, instant = false) {
+    const d = dirt.hall.value;
+    const decal = Math.max(0, Math.min(1, (d - 0.3) / 0.6));
+    for (const m of B.ctx.decalMats) m.opacity = decal;
+    for (const item of B.clutter) {
+      const want = d > item.clearAt ? 1 : 0;
+      item.scale = instant ? want : item.scale + (want - item.scale) * Math.min(1, dt * 4);
+      const s = Math.max(0.0001, item.scale);
+      item.group.scale.setScalar(s);
+      item.group.visible = item.scale > 0.01;
+      if (item.collider) item.collider.enabled = item.group.visible;
+    }
+    if (B.neonBroken.neon) B.neonBroken.neon.setDeadLevel(1 - Math.min(1, d * 1.6));
+    else {
+      B.neonBroken.mat.opacity = Math.min(1, d * 1.6);
+      B.neonClean.mat.opacity = 1 - Math.min(1, d * 1.6);
+    }
+    for (const c of B.crooked) c.p.rotation.z = c.rest * Math.min(1, d * 1.5);
+  }
+
+  // ======================================================================== presentación de compras
+
+  /**
+   * Animación de aparición de lo comprado (la cámara la encuadra desde la app):
+   * la alfombra se desenrolla, la estatua emerge, la lámpara desciende girando…
+   */
+  function updateReveal(dt) {
+    const r = state.reveal;
+    if (!r) return;
+    r.t += dt;
+    const k = Math.min(1, Math.max(0, r.t) / r.dur);
+    if (r.kind.startsWith('set:')) {
+      // conjunto: pieza a pieza, cada una crece con un pequeño rebote
+      const set = B.decorSets.get(r.kind.slice(4));
+      if (set) {
+        const n = set.items.length;
+        set.items.forEach((o, i) => {
+          const local = Math.min(1, Math.max(0, (r.t - (i / Math.max(1, n)) * r.dur * 0.6) / (r.dur * 0.4)));
+          const c1 = 1.70158;
+          const sc = local <= 0 ? 0.0001 : 1 + (c1 + 1) * (local - 1) ** 3 + c1 * (local - 1) ** 2;
+          o.userData.baseScale ??= o.scale.x;
+          o.scale.setScalar(Math.max(0.0001, o.userData.baseScale * sc));
+        });
+      }
+      if (k >= 1) state.reveal = null;
+      return;
+    }
+    const ease = 1 - (1 - k) ** 3;
+    const overshoot = (x) => {
+      const c1 = 1.70158;
+      const c3 = c1 + 1;
+      return 1 + c3 * (x - 1) ** 3 + c1 * (x - 1) ** 2;
+    };
+    switch (r.kind) {
+      case 'carpet': {
+        const c = B.carpet;
+        const sz = Math.max(0.001, ease);
+        // se desenrolla desde el estrado hacia la entrada: la parte extendida crece y el rollo avanza y adelgaza
+        const s = DECOR_SLOTS.carpet;
+        c.mesh.scale.z = sz;
+        c.mesh.position.z = s.z - (s.d / 2) * (1 - sz);
+        const r = 0.03 + 0.17 * (1 - sz);
+        c.roll.visible = sz < 0.999;
+        c.roll.scale.set(r, 1, r);
+        c.roll.position.set(s.x, r + 0.006, s.z - s.d / 2 + s.d * sz);
+        c.roll.rotation.x = -sz * s.d / 0.25;
+        c.trim.visible = sz >= 0.999;
+        break;
+      }
+      case 'statue': {
+        const g = B.statue.group;
+        g.position.y = -3.2 * (1 - ease);
+        g.rotation.y = (1 - ease) * Math.PI * 1.5;
+        break;
+      }
+      case 'chandelier': {
+        const g = B.chandelier.group;
+        g.position.y = DECOR_SLOTS.chandelier.y + 2.5 * (1 - ease);
+        g.scale.setScalar(Math.max(0.01, overshoot(Math.min(1, k * 1.15))));
+        break;
+      }
+      case 'machine': {
+        const m = B.machine.group;
+        m.scale.setScalar(1 + Math.sin(k * Math.PI) * 0.06);
+        break;
+      }
+      default:
+    }
+    if (k >= 1) {
+      if (r.kind === 'machine') B.machine.group.scale.setScalar(1);
+      state.reveal = null;
     }
   }
 
+  // ======================================================================== historia
+
+  const storyInteracts = new Map(); // id → interactuable (persisten entre reconstrucciones)
+  for (const [id, spot] of Object.entries(STORY_SPOTS)) {
+    storyInteracts.set(id, { id: `story:${id}`, target: id, pos: new THREE.Vector3(spot.x, spot.y, spot.z), radius: spot.r, prompt: { key: 'E', textKey: spot.prompt }, enabled: false });
+  }
+
+  function applyStory() {
+    if (!B) return;
+    const st = state.story;
+    const S = B.story;
+    S.setItem('toolbox', st.items.toolbox !== false);
+    S.setItem('doc_box', st.items.doc_box !== false);
+    S.lever.rotation.x = st.breaker ? -2.4 : 0;
+    // desperfectos: se ven hasta que Daniel repara (la app puede retenerlos durante su secuencia)
+    B.damage.setRepaired(st.repaired && !state.damageHold);
+    S.breakerLight.material.color.set(st.breaker ? 0x40ff70 : 0xff3040);
+    S.openSign.mesh.visible = st.entranceOpen;
+    for (const s of B.signs) if (s.closedSign) s.mesh.visible = !st.entranceOpen;
+    S.street.material.opacity = st.entranceOpen ? 0.22 : 0;
+    S.kitBoxes.visible = !st.receptionStyle && st.items.reception_kit !== false && st.receptionKit;
+    for (const [name, g] of Object.entries(S.styles)) g.visible = st.receptionStyle === name;
+    // interactuables: los de historia se añaden a la lista estable solo mientras hagan falta
+    for (const [id, it] of storyInteracts) {
+      const on = st.interacts.has(id);
+      it.enabled = on;
+      const i = interactables.indexOf(it);
+      if (on && i < 0) interactables.push(it);
+      if (!on && i >= 0) interactables.splice(i, 1);
+    }
+    // un objeto de historia puede sustituir temporalmente a uno normal en el mismo sitio
+    const replaced = new Set([...st.interacts].map((id) => STORY_SPOTS[id]?.replaces).filter(Boolean));
+    for (const it of interactables) if (it.id === 'counter' || it.id === 'machine' || it.id?.startsWith('table:')) it.enabled = !replaced.has(it.id);
+    const machineItem = interactables.find((x) => x.id === 'machine');
+    if (machineItem) {
+      machineItem.prompt = st.machineBlocked ? { key: 'E', textKey: 'prompt.outOfOrder' } : { key: 'E', textKey: 'prompt.machine', params: { machine: 'THE CLASSIC' } };
+    }
+    B.machine.setSkin?.(st.machineSkin ?? 'classic');
+    if (!st.powered && B.machine.powered) B.machine.setPowered(false);
+    if (st.powered && !B.machine.powered && !B.machine.booting) B.machine.setPowered(true);
+    // rodillos desajustados mientras esté averiada (la reparación los recoloca con animación)
+    if (!st.powered) B.machine.setReelsBroken?.(true);
+    B.machine.setServiceDoor?.(!!st.serviceDoor, { instant: !!st.instantDoor });
+    B.machine.setResetHint?.(st.interacts?.has('classic_mechanism'));
+    st.instantDoor = false;
+  }
+
+  // ======================================================================== ciclo de vida
+
+  function rebuild() {
+    const wasLoadout = state.loadout;
+    if (B) B.dispose();
+    clearBakedMaterials();
+    B = build(state.g);
+    state.signature = buildSignature(state.g);
+    if (wasLoadout) applyToBuild();
+    applyShadows(state.g);
+    // la sonda (y la exposición) se vuelven a capturar con el casino nuevo: si no, el entorno quedaba
+    // apuntando a una textura liberada y el casino se veía más oscuro tras cambiar la calidad
+    probe?.dispose();
+    probe = null;
+    applyLighting();
+    captureProbe();
+    scene.environment = probe?.texture ?? envTarget.texture;
+    probeDirty = 0;
+    world.onRebuild?.();
+  }
+
   function applyShadows(g) {
+    const spot = B.lights.spot;
     spot.castShadow = g.shadows;
     if (g.shadows && spot.shadow.mapSize.x !== g.shadowMapSize) {
       spot.shadow.mapSize.set(g.shadowMapSize, g.shadowMapSize);
       spot.shadow.map?.dispose();
       spot.shadow.map = null;
     }
-    scene.traverse((o) => { if (o.material && !Array.isArray(o.material)) o.material.needsUpdate = true; });
+    B.root.traverse((o) => {
+      if (o.isMesh) o.castShadow = g.shadows && !o.material?.transparent;
+    });
+  }
+
+  function applyEnvironment(g) {
+    void g;
+    if (!probe) captureProbe();
+    scene.environment = probe?.texture ?? envTarget.texture;
+    applyLighting();
   }
 
   const world = {
@@ -468,47 +988,167 @@ export function createWorld({ renderer, graphics }) {
     camera,
     colliders,
     interactables,
-    machine,
-    spawn: { x: 0, z: 6.4, yaw: 0 },
+    anchors,
+    bounds,
+    spawn: SPAWN,
+    focus: new THREE.Vector3(CLASSIC.x, 1.5, CLASSIC.z),
+    /** Altura del suelo (estrado de THE CLASSIC) para colocar a los personajes. */
+    floorHeight(x, z) {
+      const r = Math.hypot(x - CLASSIC.x, z - CLASSIC.z);
+      return r < CLASSIC.dais ? 0.14 : r < CLASSIC.dais + 0.45 ? 0.06 : 0;
+    },
+    /** Suciedad actual (0 limpio … 1 abandonado). */
+    get dirt() {
+      return dirt.hall.value;
+    },
+    get machine() {
+      return B.machine;
+    },
+    /** La app enlaza aquí sus callbacks de la máquina; sobreviven a las reconstrucciones. */
+    bindMachine({ onReelStop, onTick, onDone }) {
+      Object.assign(handlers, { onReelStop, onTick, onDone });
+    },
+    onRebuild: null,
     applyProgress,
+
+    /** Empieza la animación de aparición de una compra ('carpet' | 'statue' | 'chandelier' | 'machine'). */
+    reveal(kind, delay = 0) {
+      const dur = kind.startsWith('set:') ? 1.8 : { carpet: 1.6, statue: 1.8, chandelier: 2.0, machine: 0.9 }[kind];
+      if (!dur) return;
+      state.reveal = { kind, t: -delay, dur };
+      updateReveal(0);
+    },
+    /** Estado de los objetos de la historia (sobrevive a las reconstrucciones). */
+    setStory(patch) {
+      const st = state.story;
+      if (patch.items) Object.assign(st.items, patch.items);
+      for (const k of ['entranceOpen', 'receptionStyle', 'breaker', 'powered', 'machineBlocked', 'receptionKit', 'machineSkin', 'repaired', 'serviceDoor', 'instantDoor']) if (k in patch) st[k] = patch[k];
+      if (patch.interacts) st.interacts = new Set(patch.interacts);
+      applyStory();
+    },
+    /** Parpadeo de encendido de la instalación (se llama justo después de subir el nivel de luz). */
+    lightsFlicker() {
+      state.flickerT = 0.8;
+      state.flickerF = -1;
+    },
+    /** Retiene (true) los desperfectos a la vista aunque ya estén reparados: la app los suelta bajo la pantalla negra. */
+    holdDamage(on) {
+      state.damageHold = !!on;
+      applyStory();
+    },
+    /** Arranque animado de THE CLASSIC (reparación). */
+    bootMachine() {
+      state.story.powered = true;
+      B.machine.setPowered(true, { boot: true });
+      B.machine.setReelsBroken?.(false, { animate: true });
+    },
+    /** THE CLASSIC: tapa de servicio y seta de reinicio (misión de la reparación). */
+    openServiceDoor(open = true) {
+      state.story.serviceDoor = open;
+      B.machine.setServiceDoor?.(open);
+    },
+    pressResetButton() {
+      B.machine.pressReset?.();
+    },
+    /** Limpieza animada hasta `clean` (0–1) aunque no venga de una compra (misiones). */
+    animateClean(clean) {
+      state.dirtTarget = 1 - Math.max(0, Math.min(1, clean));
+    },
+
     /** Marca la tienda como «tienes algo que comprar»: flecha saltarina y brillo intenso. */
     setShopAlert(on) {
-      shopAlert = on;
-      shopArrow.visible = on;
+      state.shopAlert = on;
+      if (B) B.shop.arrow.visible = on;
     },
 
     update(dt, time, { paused = false } = {}) {
-      machine.update(paused ? 0 : dt, time);
-      for (const s of signs) {
-        const dip = Math.sin(time * 11 + s.phase * 5) > 0.992 ? 0.45 : 1;
-        s.mat.opacity = (0.88 + 0.12 * Math.sin(time * 2.3 + s.phase)) * dip;
+      // la sonda no se captura en mitad de un parpadeo de encendido (se quedaría con la luz a medias)
+      if (probeDirty > 0 && !(state.flickerT > 0) && (probeDirty -= dt) <= 0) captureProbe();
+      if (!paused) for (const w of B.wheels) w.update(dt);
+      if (state.pendingRebuild && !B.machine.busy) {
+        state.pendingRebuild = false;
+        rebuild();
       }
-      shopGem.rotation.y = time * 1.4;
-      shopGem.position.y = 2.9 + Math.sin(time * 1.8) * 0.08;
-      const pulse = shopAlert ? 0.5 + 0.5 * Math.sin(time * 6) : 0.5 + 0.5 * Math.sin(time * 1.6);
-      shopHalo.material.opacity = 0.35 + pulse * (shopAlert ? 0.6 : 0.25);
-      shopRing.material.opacity = 0.35 + pulse * (shopAlert ? 0.6 : 0.3);
-      shopRing.scale.setScalar(1 + pulse * 0.06);
-      shopLight.intensity = 14 + pulse * (shopAlert ? 30 : 8);
-      shopArrow.position.y = 2.45 + Math.abs(Math.sin(time * 4)) * 0.25;
-      shopArrow.rotation.y = time * 2;
-      chandelier.rotation.y += dt * 0.12;
-      crystalMat.emissiveIntensity = 0.4 + 0.25 * Math.sin(time * 1.7);
-      orb.position.y = 2.7 + Math.sin(time * 1.4) * 0.07;
-      orb.rotation.y = time;
+      B.machine.update(paused ? 0 : dt, time);
+      const d0 = dirt.hall.value;
+      if (Math.abs(d0 - state.dirtTarget) > 1e-4) {
+        // limpieza animada (~3 s de punta a punta)
+        const step = dt / 3;
+        dirt.hall.value = d0 > state.dirtTarget ? Math.max(state.dirtTarget, d0 - step) : Math.min(state.dirtTarget, d0 + step);
+        applyLighting();
+      }
+      const d = dirt.hall.value;
+      updateDirtVisuals(dt);
+
+      for (const s of B.signs) {
+        const dip = Math.sin(time * 11 + s.phase * 5) > 0.992 ? 0.45 : 1;
+        const stutter = s.broken && Math.sin(time * 23 + Math.sin(time * 3.1) * 4) > 0.6 ? 0.55 : 1;
+        const hum = (0.92 + 0.08 * Math.sin(time * 2.3 + s.phase)) * dip;
+        if (s.neon) {
+          s.neon.setLevel(hum, s.broken ? (Math.sin(time * 31 + Math.sin(time * 2.3) * 6) > 0.35 ? 0.15 : 1) : 1);
+          continue;
+        }
+        const base = s === B.neonBroken ? B.neonBroken.mat.opacity : s === B.neonClean ? B.neonClean.mat.opacity : 1;
+        s.mat.opacity = base * hum * stutter;
+      }
+
+      // tienda
+      const sh = B.shop;
+      sh.gem.rotation.y = time * 1.4;
+      sh.gem.position.y = 2.7 + Math.sin(time * 1.8) * 0.08;
+      const pulse = state.shopAlert ? 0.5 + 0.5 * Math.sin(time * 6) : 0.5 + 0.5 * Math.sin(time * 1.6);
+      sh.halo.material.opacity = 0.35 + pulse * (state.shopAlert ? 0.6 : 0.25);
+      sh.ring.material.opacity = 0.35 + pulse * (state.shopAlert ? 0.6 : 0.3);
+      sh.ring.scale.setScalar(1 + pulse * 0.06);
+      sh.arrow.position.y = 2.2 + Math.abs(Math.sin(time * 4)) * 0.25;
+      sh.arrow.rotation.y = time * 2;
+      if (B.lights.counter) B.lights.counter.light.intensity = B.lights.counter.base * (state.lightK ?? 1) * (state.flickerT > 0 ? Math.max(0, state.flickerF) : 1) * (0.85 + pulse * (state.shopAlert ? 0.5 : 0.15));
+
+      // luces que fallan: el foco titila un poco y una lámpara parpadea mientras hay suciedad
+      const lvl = state.loadout?.lighting ?? 0;
+      const failing = d > 0.4 && lvl === 0;
+      const flick = failing && Math.sin(time * 17) * Math.sin(time * 5.3) > 0.82 ? 0.25 : 1;
+      B.pendants.flicker.emissiveIntensity = (B.pendants.flicker.userData.eBase ?? 1.25) * flick;
+      const kNow = LIGHT_LEVELS[lvl] * (0.82 + 0.18 * (1 - d));
+      for (const e of B.lights.all) if (e.kind === 'flicker') e.light.intensity = e.base * kNow * flick;
+      const keyFlick = d > 0.6 && Math.sin(time * 31) > 0.985 ? 0.6 : 1;
+      B.lights.spot.intensity = B.lights.spot.userData.k = 420 * LIGHT_LEVELS[state.loadout?.lighting ?? 0] * (0.82 + 0.18 * (1 - d)) * keyFlick;
+      // encendido general: los contactores entran a trompicones (dos parpadeos) y se queda fijo
+      if (state.flickerT > 0) {
+        state.flickerT = Math.max(0, state.flickerT - dt);
+        const tt = 0.8 - state.flickerT;
+        const f = state.flickerT === 0 ? 1 : tt < 0.08 ? 1 : tt < 0.2 ? 0.22 : tt < 0.28 ? 0.9 : tt < 0.44 ? 0.35 : 1;
+        if (f !== state.flickerF) {
+          state.flickerF = f;
+          applyLighting(f);
+        }
+        B.lights.spot.intensity *= f;
+      }
+
+      // compras
+      if (B.chandelier.group.visible && B.chandelier.crystals) B.chandelier.group.rotation.y += dt * 0.12; // la procedural gira; la real cuelga quieta
+      B.statue.orb.userData.y0 ??= B.statue.orb.position.y;
+      B.statue.orb.position.y = B.statue.orb.userData.y0 + Math.sin(time * 1.4) * (B.statue.orb.userData.y0 < 2.5 ? 0.025 : 0.07);
       if (state.wingOpen > 0 && state.wingOpen < 1) {
         state.wingOpen = Math.min(1, state.wingOpen + dt / 1.6);
-        wingDoor.position.y = (1 - (1 - state.wingOpen) ** 3) * 2.9;
-        if (state.wingOpen >= 1) wingDoor.visible = false;
+        B.doorObjects.wing.position.y = (1 - (1 - state.wingOpen) ** 3) * (DOOR_H + 0.1);
+        if (state.wingOpen >= 1) B.doorObjects.wing.visible = false;
       }
-      if (state.effects) {
-        for (let i = 0; i < DUST; i++) {
+      for (const u of B.ctx.dynamic) u.update(dt, time, d);
+      B.damage.update(dt, time);
+      updateReveal(dt);
+
+      // polvo (más visible cuanto más sucio)
+      const dust = B.dust;
+      if (dust.points.visible) {
+        dust.mat.opacity = 0.2 + 0.35 * d;
+        for (let i = 0; i < dust.count; i++) {
           const j = i * 3;
-          dustPos[j] = dustSeed[j] + Math.sin(time * 0.15 + i) * 0.5;
-          dustPos[j + 1] = 0.4 + ((dustSeed[j + 1] + time * 0.06 * (1 + (i % 5) * 0.2)) % 3.9);
-          dustPos[j + 2] = dustSeed[j + 2] + Math.cos(time * 0.12 + i * 1.3) * 0.5;
+          dust.pos[j] = dust.seed[j] + Math.sin(time * 0.15 + i) * 0.5;
+          dust.pos[j + 1] = 0.4 + ((dust.seed[j + 1] + time * 0.05 * (1 + (i % 5) * 0.2)) % 4.8);
+          dust.pos[j + 2] = dust.seed[j + 2] + Math.cos(time * 0.12 + i * 1.3) * 0.5;
         }
-        dustGeo.attributes.position.needsUpdate = true;
+        dust.points.geometry.attributes.position.needsUpdate = true;
       }
     },
 
@@ -517,21 +1157,66 @@ export function createWorld({ renderer, graphics }) {
       camera.updateProjectionMatrix();
     },
 
+    /** ¿Este cambio de ajustes obliga a reconstruir el casino? (la app muestra «aplicando calidad…») */
+    needsRebuild(g) {
+      return buildSignature(g) !== state.signature;
+    },
+
+    /** Compila en paralelo (sin congelar) los shaders de todo lo que hay en escena. */
+    async precompile() {
+      // con tope de tiempo: si el navegador no informa de que los shaders están listos, se sigue igual
+      const limit = new Promise((resolve) => setTimeout(resolve, 6000));
+      try {
+        const job = renderer.compileAsync ? renderer.compileAsync(scene, camera) : Promise.resolve(renderer.compile(scene, camera));
+        await Promise.race([job.catch((err) => console.warn('[world] precompilación de shaders:', err)), limit]);
+      } catch (err) {
+        console.warn('[world] precompilación de shaders:', err);
+      }
+    },
+
     onGraphicsChanged(g) {
-      state.effects = g.effects;
-      dust.visible = g.effects;
-      pool.visible = g.effects;
-      machine.setEffects(g.effects);
+      state.g = g;
+      if (buildSignature(g) !== state.signature) {
+        // cambia la geometría/materiales: reconstruir (si la máquina gira, al terminar)
+        if (B.machine.busy) state.pendingRebuild = true;
+        else rebuild();
+        return;
+      }
+      applyEnvironment(g);
+      B.dust.points.visible = g.effects && B.dust.count > 0;
+      B.pool.visible = g.effects;
+      B.machine.setEffects(g.effects);
       applyShadows(g);
     },
 
+    /** Cambio de idioma: repinta los carteles y el texto de la máquina. */
+    refreshTexts() {
+      for (const s of B.signs) {
+        if (!s.dynamic) continue;
+        if (s.neon) {
+          const txt = typeof s.text === 'function' ? s.text() : s.text;
+          const sub = typeof s.opts.sub === 'function' ? s.opts.sub() : s.opts.sub ?? null;
+          if (neonCanDraw(txt) && (!sub || neonCanDraw(String(sub).toUpperCase()))) s.neon.setText(txt, sub);
+          continue;
+        }
+        s.mat.map?.dispose();
+        s.mat.map = B.signTex(s.text, s.opts);
+        s.mat.needsUpdate = true;
+      }
+      for (const d of interactables) {
+        if (d.zone) d.prompt = { ...d.prompt, params: { zone: t(`zone.${d.zone}`) } };
+      }
+      B.machine.refreshTexts?.();
+    },
+
     dispose() {
-      machine.dispose();
-      for (const o of owned) o.dispose?.();
+      B?.dispose();
       envTarget.dispose();
-      spot.shadow.map?.dispose();
-      crystals.dispose();
     },
   };
+
+  B = build(graphics);
+  applyEnvironment(graphics);
+  applyShadows(graphics);
   return world;
 }

@@ -1,12 +1,14 @@
 {
   "name": "house-of-odds",
-  "version": "0.1.0",
+  "version": "0.6.2-beta",
   "private": true,
   "description": "HOUSE OF ODDS — casino arcade 3D ficticio para navegador (Three.js). Sin apuestas ni dinero real.",
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --test"
+    "test": "node --test",
+    "audio": "node scripts/build-audio-manifest.mjs",
+    "dialogues": "node scripts/dialogue-audio.mjs"
   },
   "engines": {
     "node": ">=18"

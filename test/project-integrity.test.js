@@ -56,7 +56,13 @@ test('todos los imports de src/ se resuelven (relativos a fichero, o presentes e
         assert.ok(existsSync(resolve(dirname(file), spec)), `${rel(file)}: import roto → ${spec}`);
         assert.ok(/\.m?js$/.test(spec), `${rel(file)}: los imports relativos deben llevar extensión → ${spec}`);
       } else {
-        assert.ok(Object.hasOwn(importMap, spec), `${rel(file)}: «${spec}» no está en el import map`);
+        const prefix = Object.keys(importMap).find((k) => k.endsWith('/') && spec.startsWith(k));
+        if (prefix) {
+          const target = resolve(ROOT, importMap[prefix] + spec.slice(prefix.length));
+          assert.ok(existsSync(target), `${rel(file)}: «${spec}» → ${target} no existe`);
+        } else {
+          assert.ok(Object.hasOwn(importMap, spec), `${rel(file)}: «${spec}» no está en el import map`);
+        }
       }
     }
   }
@@ -113,7 +119,10 @@ test('no hay llamadas a APIs de apuestas ni a servicios externos en el código',
     // única excepción: audio-engine carga sus .mp3 opcionales de assets/audio (mismo origen)
     if (/\bfetch\s*\(/.test(source)) {
       assert.equal(rel(file), 'src/audio/audio-engine.js', `${rel(file)}: el juego no debe hacer peticiones de red`);
-      assert.ok(/fetch\(`\$\{AUDIO_DIR\}/.test(source), 'fetch solo puede apuntar a AUDIO_DIR');
+      // todas las peticiones reciben una variable `url` que solo se construye con AUDIO_DIR / VOICE_DIR (mismo origen)
+      for (const m of source.matchAll(/\bfetch\s*\(([^,)]*)/g)) assert.equal(m[1].trim(), 'url', `fetch(${m[1]}) no permitido`);
+      assert.ok(/\$\{AUDIO_DIR\}/.test(source) && /\$\{VOICE_DIR\}/.test(source));
+      assert.ok(!/https?:\/\//.test(source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')), 'sin URLs externas');
     }
     assert.ok(!/XMLHttpRequest|WebSocket|sendBeacon/.test(source), `${rel(file)}: acceso a red no permitido`);
   }

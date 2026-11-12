@@ -72,7 +72,7 @@ export class DebugOverlay {
       `estado      ${state.current}`,
       `fps         ${loop.fps.toFixed(1)}  (${loop.frameMs.toFixed(1)} ms)`,
       `calidad     ${settings.quality}   [F4 cambia]`,
-      `sombras     ${mark(settings.shadows)}`,
+      `sombras     ${mark(settings.shadows)}   post ${['bloom', 'ao', 'smaa'].filter((k) => settings.post[k]).join('+') || 'off'}`,
       `antialias   ${aa}`,
       `resolución  ${size.width}×${size.height} @ ${size.pixelRatio.toFixed(2)}x`,
       `draw calls  ${info.render.calls}`,

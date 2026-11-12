@@ -55,8 +55,8 @@
   --hoo-crimson-bright: #c42240;
   --hoo-panel: rgba(12, 9, 10, 0.86);
 
-  --font-display: 'Cinzel', 'Trajan Pro', 'Didot', 'Georgia', serif;
-  --font-body: 'Cormorant Garamond', 'Garamond', 'Georgia', serif;
+  --font-display: 'Cinzel', 'Trajan Pro', 'Didot', 'Georgia', 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong', 'SimSun', 'Microsoft YaHei', 'PingFang SC', serif;
+  --font-body: 'Cormorant Garamond', 'Garamond', 'Georgia', 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong', 'SimSun', 'Microsoft YaHei', 'PingFang SC', serif;
   --font-mono: ui-monospace, 'Cascadia Mono', 'Consolas', 'Menlo', monospace;
 
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);

@@ -53,7 +53,7 @@ export class Game {
    * @param {{onProgress?: (fraction: number, message: string) => Promise<void>|void}} [options]
    */
   async init({ onProgress = () => {} } = {}) {
-    await onProgress(0.2, 'Inicializando renderizador…');
+    await onProgress(0.2, 'boot.renderer');
     this.renderer = new GameRenderer({
       canvas: this.#canvas,
       graphics: this.settings.graphics,
@@ -65,14 +65,14 @@ export class Game {
       this.bus.on('graphics:changed', ({ settings }) => this.controller?.onGraphicsChanged?.(settings)),
     );
 
-    await onProgress(0.6, 'Preparando el bucle de juego…');
+    await onProgress(0.6, 'boot.loop');
     this.loop = new GameLoop({
       update: (dt) => this.#update(dt),
       render: () => this.#render(),
       onError: (error) => this.fail(error),
     });
 
-    await onProgress(1, 'Listo');
+    await onProgress(1, 'boot.ready');
   }
 
   start() {
@@ -121,6 +121,6 @@ export class Game {
   }
 
   #render() {
-    if (this.controller) this.renderer.render(this.controller.scene, this.controller.camera);
+    if (this.controller) this.renderer.render(this.controller.scene, this.controller.camera, this.loop?.frameMs ? this.loop.frameMs / 1000 : 0.016);
   }
 }

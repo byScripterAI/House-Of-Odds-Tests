@@ -1,4 +1,5 @@
 import { MAIN_CREDITS } from '../data/credits.js';
+import { t } from '../i18n/index.js';
 import { Screen, button, el, uiSfx } from './ui-kit.js';
 
 const SPEED = 0.085; // alturas de pantalla por segundo
@@ -22,7 +23,7 @@ export class CreditsScreen extends Screen {
     super('screen--credits');
     this.#track = el('div', 'rolling');
     this.#sparkle = el('div', 'rolling-sparkle');
-    const back = button('← VOLVER', () => this.close(), { cls: 'credits__back' });
+    const back = button(() => t('credits.back'), () => this.close(), { cls: 'credits__back' });
     this.el.append(this.#sparkle, this.#track, back);
     this.el.addEventListener('pointerdown', (e) => { if (!e.target.closest('button')) this.#fast = true; });
     window.addEventListener('pointerup', () => { this.#fast = false; });
@@ -33,7 +34,7 @@ export class CreditsScreen extends Screen {
   #build(blocks) {
     this.#track.replaceChildren();
     for (const b of blocks) {
-      const node = el('div', `rolling__${b.t}`, b.v ?? '');
+      const node = el('div', `rolling__${b.t}`, b.k ? () => t(b.k) : (b.v ?? ''));
       if (b.color) node.style.setProperty('--c', b.color);
       this.#track.append(node);
     }

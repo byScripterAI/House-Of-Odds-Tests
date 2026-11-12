@@ -144,24 +144,61 @@ export function carpetTexture() {
 }
 
 /** Rótulo de neón: texto con halo sobre fondo transparente. */
-export function neonTexture(text, { color = '#ffd76a', glow = '#d4af37', w = 1024, h = 256, font = '700 120px Cinzel, serif', sub = null } = {}) {
+export function neonTexture(text, { color = '#ffd76a', glow = '#d4af37', w = 1024, h = 256, font = '700 120px Cinzel, serif', sub = null, dead = null, haloOnly = false } = {}) {
   const [c, ctx] = canvas(w, h);
-  ctx.textAlign = 'center';
+  ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   ctx.font = font;
   const y = sub ? h * 0.42 : h / 2;
-  ctx.shadowColor = glow;
-  ctx.shadowBlur = 38;
-  ctx.fillStyle = glow;
-  ctx.fillText(text, w / 2, y);
-  ctx.shadowBlur = 16;
-  ctx.fillText(text, w / 2, y);
-  ctx.shadowBlur = 4;
-  ctx.fillStyle = color;
-  ctx.fillText(text, w / 2, y);
+  // Se dibuja letra a letra para poder apagar algunas («H_USE OF _DDS»: neón roto).
+  const chars = [...text];
+  const widths = chars.map((ch) => ctx.measureText(ch).width);
+  const total = widths.reduce((p, q) => p + q, 0);
+  let cursor = (w - total) / 2;
+  const positions = widths.map((cw) => { const x = cursor; cursor += cw; return x; });
+  const pass = (blur, fill, skipDead) => {
+    ctx.shadowBlur = blur;
+    ctx.shadowColor = glow;
+    ctx.fillStyle = fill;
+    chars.forEach((ch, i) => {
+      if (skipDead && dead?.includes(i)) return;
+      ctx.fillText(ch, positions[i], y);
+    });
+  };
+  if (haloOnly) {
+    // solo el resplandor (para la pared detrás de un neón 3D): se dibuja fuera y se queda la sombra
+    const OFF = w * 4;
+    // que el texto ocupe ~70 % del lienzo: el resplandor no se corta en los bordes del plano
+    const fit = Math.min(1, (w * 0.7) / Math.max(1, total));
+    ctx.translate(w / 2, y);
+    ctx.scale(fit, fit);
+    ctx.translate(-w / 2, -y);
+    ctx.shadowOffsetX = OFF;
+    ctx.translate(-OFF / fit, 0);
+    pass(70, glow, true);
+    pass(34, glow, true);
+    if (sub) {
+      ctx.textAlign = 'center';
+      ctx.font = '400 46px "Cormorant Garamond", Georgia, serif';
+      ctx.shadowBlur = 24;
+      ctx.fillText(sub, w / 2, h * 0.82);
+    }
+    return texture(c, { wrap: false });
+  }
+  pass(38, glow, true);
+  pass(16, glow, true);
+  pass(4, color, true);
+  if (dead?.length) {
+    // Tubos apagados: gris oscuro sin brillo.
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = 'rgba(70,60,52,0.9)';
+    chars.forEach((ch, i) => { if (dead.includes(i)) ctx.fillText(ch, positions[i], y); });
+  }
   if (sub) {
+    ctx.textAlign = 'center';
     ctx.font = '400 46px "Cormorant Garamond", Georgia, serif';
     ctx.shadowBlur = 10;
+    ctx.shadowColor = glow;
     ctx.fillStyle = color;
     ctx.fillText(sub, w / 2, h * 0.82);
   }

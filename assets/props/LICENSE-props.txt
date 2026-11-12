@@ -1,0 +1,17 @@
+Mobiliario y atrezo del juego (modelos optimizados: texturas WebP reducidas, geometría con EXT_meshopt_compression).
+
+glTF Sample Assets (The Khronos Group) — https://github.com/KhronosGroup/glTF-Sample-Assets
+plant.glb          DiffuseTransmissionPlant — Eric Chadwick (CC BY 4.0), Rico Cilliers (CC0 1.0)
+vase.glb           GlassVaseFlowers — (CC0 1.0)
+CC BY 4.0: https://creativecommons.org/licenses/by/4.0/
+
+Poly Haven — https://polyhaven.com (todos CC0 1.0: dominio público, sin atribución obligatoria)
+armchair.glb       ArmChair_01            sofa.glb           Sofa_01
+coffee_table.glb   coffee_table_round_01  chandelier_01.glb  Chandelier_01
+chandelier_03.glb  Chandelier_03          console.glb        ClassicConsole_01
+nightstand.glb     ClassicNightstand_01   brass_vase.glb     brass_vase_01
+bust.glb           marble_bust_01         tool_chest.glb     metal_tool_chest
+work_table.glb     painted_wooden_table   ladder.glb         ladder_sectioned_01
+crate.glb          wooden_crate_02        crate_01.glb       wooden_crate_01
+        cardboard_box.glb  cardboard_box_01
+utility_box.glb    utility_box_01         power_box.glb      power_box_01

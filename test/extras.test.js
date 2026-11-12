@@ -6,6 +6,7 @@ import { SOUNDS, SOUND_NAMES } from '../src/audio/sound-list.js';
 import { MAIN_CREDITS, FINAL_CREDITS } from '../src/data/credits.js';
 import { Progress, normalizeState } from '../src/systems/progress.js';
 import { sanitizeSettings } from '../src/save/save-manager.js';
+import { DICTIONARIES } from '../src/i18n/index.js';
 
 test('Tutorial: avanza en orden y cuenta eventos ocurridos antes de su paso', () => {
   const changes = [];
@@ -25,10 +26,17 @@ test('Tutorial: avanza en orden y cuenta eventos ocurridos antes de su paso', ()
   assert.equal(t.report('look'), false);
 });
 
-test('Tutorial: pasos y avisos tienen ids únicos y texto', () => {
+test('Tutorial: pasos y avisos tienen ids únicos y texto en los 6 idiomas', () => {
   const ids = [...INTRO_STEPS, ...HINTS].map((s) => s.id);
   assert.equal(new Set(ids).size, ids.length);
-  for (const s of INTRO_STEPS) assert.ok(s.text.length > 5 && s.event);
+  for (const s of INTRO_STEPS) assert.ok(s.event);
+  for (const [code, dict] of Object.entries(DICTIONARIES)) {
+    for (const s of INTRO_STEPS) assert.ok(dict[`tut.${s.id}`]?.length > 3, `${code}: tut.${s.id}`);
+    for (const h of HINTS) {
+      const base = h.id.replace('-', '.');
+      assert.ok(dict[`${base}.title`] && dict[`${base}.text`], `${code}: ${base}`);
+    }
+  }
 });
 
 test('Progress: los tutoriales vistos se guardan, se limpian y no se duplican', () => {
@@ -48,7 +56,8 @@ test('Sonidos: nombres únicos y SOUNDS.md documenta todos', () => {
 });
 
 test('Créditos: contienen a todo el equipo y los textos exigidos', () => {
-  const flat = (c) => c.map((b) => b.v ?? '').join('\n');
+  // texto en inglés (el idioma de referencia), resolviendo las claves de traducción
+  const flat = (c) => c.map((b) => (b.k ? DICTIONARIES.en[b.k] : b.v) ?? '').join('\n');
   for (const name of ['Hugo Gonzalez', 'Ethan Caldwell', 'Lucía Fernández', 'Lucas Whitmore', 'Marc Belmonte', 'Oliver Hayes', 'Gabriel Ashford', 'Clara Bennett', 'Marta Villanueva', 'Sebastian Cole', 'Pablo Ferrer']) {
     assert.ok(flat(MAIN_CREDITS).includes(name) && flat(FINAL_CREDITS).includes(name), name);
   }

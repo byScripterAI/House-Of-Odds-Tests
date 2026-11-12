@@ -196,6 +196,9 @@
 .switch:hover { border-color: var(--hoo-gold-light); }
 
 .segmented { display: flex; }
+.set-row.set-row--stack, .set-row--stack:has(.segmented) { grid-template-columns: 1fr; gap: 0.4rem; }
+.segmented--wide { width: 100%; }
+.segmented--wide .segmented__btn { flex: 1 1 0; min-width: 0; padding: 0.5rem 0.2rem; letter-spacing: 0.06em; font-size: 0.74rem; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .segmented__btn { padding: 0.35rem 0.9rem; font-family: var(--font-display); font-size: 0.8rem; letter-spacing: 0.15em; color: var(--hoo-warm-white); background: transparent; border: 1px solid rgba(245, 234, 215, 0.25); margin-left: -1px; cursor: pointer; transition: all 0.2s; }
 .segmented__btn.is-active { background: rgba(158, 27, 50, 0.45); border-color: var(--hoo-gold); color: var(--hoo-gold-light); z-index: 1; position: relative; }
 .segmented__btn:hover:not(.is-active) { background: rgba(245, 234, 215, 0.08); }
@@ -336,3 +339,13 @@
 .rolling__small { margin-top: 2rem; font-family: var(--font-display); font-size: 0.8rem; letter-spacing: 0.25em; color: rgba(245, 234, 215, 0.45); }
 .rolling__gap { height: clamp(1.2rem, 4vw, 3rem); }
 .credits__back { position: absolute; top: 20px; left: 22px; z-index: 5; }
+
+/* ---- selector de idioma ---- */
+.lang-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; }
+.lang-btn { padding: 0.7rem 0.5rem; font-family: var(--font-body); font-weight: 600; font-size: 1.05rem; letter-spacing: 0.04em; color: var(--hoo-warm-white); background: rgba(245, 234, 215, 0.04); border: 1px solid rgba(245, 234, 215, 0.22); border-radius: 4px; cursor: pointer; transition: transform 0.15s, background 0.2s, border-color 0.2s, box-shadow 0.2s; }
+.lang-btn:hover:not(.is-active) { background: rgba(245, 234, 215, 0.1); transform: translateY(-1px); }
+.lang-btn.is-active { background: linear-gradient(180deg, rgba(158, 27, 50, 0.75), rgba(110, 16, 34, 0.75)); border-color: var(--hoo-gold); color: var(--hoo-gold-light); box-shadow: 0 0 14px rgba(212, 175, 55, 0.35); }
+@media (max-width: 520px) { .lang-grid { grid-template-columns: repeat(2, 1fr); } }
+
+/* ---- chino: el espaciado de letras de las fuentes latinas queda mal en ideogramas ---- */
+html[lang='zh'] body *, html[lang='zh'] .btn, html[lang='zh'] .hud__label { letter-spacing: 0.06em !important; }

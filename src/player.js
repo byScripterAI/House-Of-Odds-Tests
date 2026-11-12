@@ -20,10 +20,11 @@ export class Player {
    * @param {{canvas: HTMLCanvasElement, getSettings: () => any,
    *          colliders: Array, onLockChange?: (locked: boolean) => void}} opts
    */
-  constructor({ canvas, getSettings, colliders, onLockChange = () => {} }) {
+  constructor({ canvas, getSettings, colliders, bounds = PLAYER.bounds, onLockChange = () => {} }) {
     this.canvas = canvas;
     this.getSettings = getSettings;
     this.colliders = colliders;
+    this.bounds = bounds; // objeto vivo: el mundo lo amplía al expandirse
     this.onLockChange = onLockChange;
     this.pos = { x: 0, z: 6.4 };
     this.yaw = 0;
@@ -137,7 +138,7 @@ export class Player {
     const sp = Math.hypot(this.velocity.x, this.velocity.z);
     this.moving = sp > 0.25;
     if (sp > 0.001) {
-      moveWithCollisions(this.pos, this.velocity.x * dt, this.velocity.z * dt, this.colliders);
+      moveWithCollisions(this.pos, this.velocity.x * dt, this.velocity.z * dt, this.colliders, this.bounds);
       this.bob += dt * (this.input.sprint ? 12 : 8.5) * Math.min(1, sp / PLAYER.walkSpeed);
     }
   }
