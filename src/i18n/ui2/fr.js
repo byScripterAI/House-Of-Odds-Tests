@@ -56,6 +56,7 @@ export default {
   "ui.beta.p3": "Si tu en trouves un, note ce que tu faisais et ce qui s’est passé, et envoie-le au développeur du jeu. Chaque rapport aide !",
   "ui.beta.version": "Version {v}",
   "ui.beta.go": "Compris, on joue",
+  "boot.tipLabel": "Astuce",
   "boot.tip.1": "Chaque machine a son histoire. Parle au personnel pour la découvrir.",
   "boot.tip.2": "Appuie sur J pour voir tes missions et choisir celle à suivre.",
   "boot.tip.3": "Les améliorations de Sofía et Daniel changent vraiment la salle : lumière, propreté et décor.",

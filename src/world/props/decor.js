@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { batchModel, hasModel, paletteRemap } from './models.js';
-import { Batch } from '../../gfx/geometry.js';
+import { Batch, moldedFrame } from '../../gfx/geometry.js';
 import { runnerCarpet, stainDecal, webDecal } from '../../gfx/textures.js';
 import { CLASSIC, DECOR_SLOTS, HALL } from '../layout.js';
 import { armchair } from './furniture.js';
@@ -97,9 +97,30 @@ function oilPainting(seed) {
   return tex;
 }
 
+/** Cuadros pintados de antemano (scripts/art/paintings.py): seis obras art déco distintas, cargadas en la pantalla de carga. */
+const ART_FILES = ['art-1', 'art-2', 'art-3', 'art-4', 'art-5', 'wing-a'];
+const artTextures = new Map();
+export async function loadArt() {
+  const loader = new THREE.TextureLoader();
+  await Promise.all(ART_FILES.map(async (name) => {
+    try {
+      const t = await loader.loadAsync(new URL(`../../../assets/art/${name}.webp`, import.meta.url).href);
+      t.colorSpace = THREE.SRGBColorSpace;
+      t.anisotropy = 8;
+      t.userData.sharedAsset = true;
+      artTextures.set(name, t);
+    } catch (e) {
+      console.warn('[art] no se pudo cargar', name, e);
+    }
+  }));
+}
+
+/** Perfil de marco dorado (de fuera hacia dentro): canto, bocel, escocia, gola y filete de luz. */
+const FRAME_PROFILE = [[0, 0], [0, 0.05], [0.01, 0.068], [0.026, 0.075], [0.042, 0.09], [0.056, 0.1], [0.07, 0.098], [0.084, 0.086], [0.094, 0.07], [0.104, 0.062], [0.118, 0.06], [0.128, 0.052], [0.134, 0.04], [0.138, 0.03], [0.14, 0.02], [0.14, 0.0]];
+
 /**
- * Cuadro: marco dorado de cuatro listones con bocel, paspartú de lino y lienzo REHUNDIDO (sin
- * superficies coplanarias: nada de parpadeos). `crooked` lo deja torcido (casino descuidado).
+ * Cuadro: marco dorado moldurado con ingletes reales, entrecalle de lino y lienzo REHUNDIDO (sin superficies
+ * coplanarias). `crooked` lo deja torcido (casino descuidado).
  */
 export function painting(ctx, { x, y, z, yaw, w = 1.5, h = 2.0, seed, crooked = 0 }) {
   const { H, M } = ctx;
@@ -109,28 +130,21 @@ export function painting(ctx, { x, y, z, yaw, w = 1.5, h = 2.0, seed, crooked = 
   grp.rotation.z = crooked;
   ctx.root.add(grp);
   const b = new Batch();
-  const fw = 0.12; // ancho del listón
-  const fd = 0.09; // grosor del marco
-  const ow = w + 0.16 + fw * 2;
-  const oh = h + 0.16 + fw * 2;
-  // listones exteriores (con bisel)
-  H.box(b, M.gold, ow, fw, fd, 0, oh / 2 - fw / 2, fd / 2, { r: 0.02 });
-  H.box(b, M.gold, ow, fw, fd, 0, -oh / 2 + fw / 2, fd / 2, { r: 0.02 });
-  H.box(b, M.gold, fw, oh - fw * 2, fd, -ow / 2 + fw / 2, 0, fd / 2, { r: 0.02 });
-  H.box(b, M.gold, fw, oh - fw * 2, fd, ow / 2 - fw / 2, 0, fd / 2, { r: 0.02 });
-  // bocel interior
-  const iw = w + 0.16;
-  const ih = h + 0.16;
-  H.box(b, M.brass, iw, 0.022, 0.03, 0, ih / 2, fd - 0.012, { r: 0.008 });
-  H.box(b, M.brass, iw, 0.022, 0.03, 0, -ih / 2, fd - 0.012, { r: 0.008 });
-  H.box(b, M.brass, 0.022, ih, 0.03, -iw / 2, 0, fd - 0.012, { r: 0.008 });
-  H.box(b, M.brass, 0.022, ih, 0.03, iw / 2, 0, fd - 0.012, { r: 0.008 });
-  // paspartú (detrás del lienzo)
-  H.box(b, M.paper, iw, ih, 0.02, 0, 0, 0.03, { r: 0 });
+  const liner = 0.05;
+  const iw = w + liner * 2;
+  const ih = h + liner * 2;
+  const ow = iw + 0.28;
+  const oh = ih + 0.28;
+  b.add(ctx.H.geo(`frame|${ow.toFixed(3)}|${oh.toFixed(3)}`, () => moldedFrame(ow, oh, FRAME_PROFILE)), M.gold, {});
+  // trasera del marco (no se ve hueco por los lados)
+  H.box(b, M.woodDark(), ow - 0.02, oh - 0.02, 0.02, 0, 0, 0.01, { r: 0 });
+  // entrecalle de lino con un filete dorado interior
+  H.box(b, M.paper, iw + 0.02, ih + 0.02, 0.02, 0, 0, 0.03, { r: 0 });
+  b.add(ctx.H.geo(`slip|${iw.toFixed(3)}|${ih.toFixed(3)}`, () => moldedFrame(w + 0.03, h + 0.03, [[0, 0], [0, 0.008], [0.006, 0.014], [0.015, 0.01], [0.015, 0]])), M.gold, { z: 0.04 });
   b.build(grp, { cast: false, receive: true });
-  const tex = oilPainting(seed);
+  const tex = artTextures.get(seed) ?? oilPainting(seed);
   const art = new THREE.Mesh(ctx.track(new THREE.PlaneGeometry(w, h)), ctx.kit.make({ map: tex, rough: 0.42, envIntensity: 0.4, dirt: 'hall' }));
-  art.position.z = 0.052; // 1,2 cm por delante del paspartú y 4 cm por detrás del frente del marco
+  art.position.z = 0.046;
   grp.add(art);
   return grp;
 }
@@ -338,6 +352,95 @@ export function buildGrimeDecals(ctx) {
  * Trastos tirados por el suelo. TODOS se retiran con la primera limpieza (umbral `clearAt` ≥ 0,5:
  * la limpieza deja la suciedad en 0,45). Devuelve la lista para que el mundo la anime.
  */
+/** Texturas de los desperdicios (papel impreso, naipe, yeso): nada de piezas blancas lisas. */
+const junkTex = new Map();
+function junkTexture(kind) {
+  if (junkTex.has(kind)) return junkTex.get(kind);
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 256;
+  const x = c.getContext('2d');
+  let s = kind.length * 977;
+  const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+  if (kind === 'paper') {
+    // papel amarillento con columnas de texto impreso, una cabecera y manchas de humedad
+    x.fillStyle = '#cfc4ad';
+    x.fillRect(0, 0, 256, 256);
+    for (let i = 0; i < 1500; i++) {
+      x.fillStyle = `rgba(${90 + rnd() * 60},${70 + rnd() * 40},${40 + rnd() * 30},${0.04 + rnd() * 0.05})`;
+      x.fillRect(rnd() * 256, rnd() * 256, 2 + rnd() * 6, 1 + rnd() * 3);
+    }
+    x.fillStyle = 'rgba(40,30,25,0.85)';
+    x.fillRect(18, 16, 220, 22);
+    for (let col = 0; col < 2; col++) {
+      for (let row = 0; row < 24; row++) {
+        x.fillStyle = `rgba(45,38,32,${0.45 + rnd() * 0.25})`;
+        x.fillRect(20 + col * 116, 50 + row * 8, 70 + rnd() * 34, 3);
+      }
+    }
+    const g = x.createRadialGradient(180, 190, 4, 180, 190, 70);
+    g.addColorStop(0, 'rgba(120,90,50,0.35)');
+    g.addColorStop(1, 'rgba(120,90,50,0)');
+    x.fillStyle = g;
+    x.fillRect(0, 0, 256, 256);
+  } else if (kind === 'card') {
+    // naipe: borde, índice y palo
+    x.fillStyle = '#ece6d6';
+    x.fillRect(0, 0, 256, 256);
+    for (const [ox, col, glyph, idx] of [[0, '#a3162c', '♥', '7'], [128, '#141214', '♠', 'A']]) {
+      x.strokeStyle = 'rgba(0,0,0,0.25)';
+      x.strokeRect(ox + 6, 6, 116, 244);
+      x.fillStyle = col;
+      x.font = '700 30px Georgia, serif';
+      x.fillText(idx, ox + 14, 40);
+      x.font = '56px Georgia, serif';
+      x.fillText(glyph, ox + 40, 150);
+    }
+  } else {
+    // yeso: blanco roto con poros y tierra
+    x.fillStyle = '#a49c8d';
+    x.fillRect(0, 0, 256, 256);
+    for (let i = 0; i < 2600; i++) {
+      const v = 120 + rnd() * 90;
+      x.fillStyle = `rgba(${v},${v - 6},${v - 18},0.5)`;
+      x.fillRect(rnd() * 256, rnd() * 256, 1 + rnd() * 4, 1 + rnd() * 4);
+    }
+    for (let i = 0; i < 60; i++) {
+      x.fillStyle = 'rgba(60,50,40,0.35)';
+      x.beginPath();
+      x.arc(rnd() * 256, rnd() * 256, 1 + rnd() * 3, 0, Math.PI * 2);
+      x.fill();
+    }
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  t.userData.sharedAsset = true;
+  junkTex.set(kind, t);
+  return t;
+}
+
+/** Bola de papel arrugado: icosaedro deformado (pliegues), con UV para la textura impresa. */
+let crumpleGeo = null;
+function crumpledPaper() {
+  if (crumpleGeo) return crumpleGeo;
+  const g = new THREE.IcosahedronGeometry(1, 1);
+  const p = g.attributes.position;
+  let s = 91;
+  const rnd = () => ((s = (s * 16807) % 2147483647) / 2147483647);
+  for (let i = 0; i < p.count; i++) {
+    const k = 0.72 + rnd() * 0.5;
+    p.setXYZ(i, p.getX(i) * k, p.getY(i) * k, p.getZ(i) * k);
+  }
+  const flat = g.index ? g.toNonIndexed() : g;
+  flat.computeVertexNormals();
+  const uv = [];
+  for (let i = 0; i < flat.attributes.position.count; i++) uv.push(flat.attributes.position.getX(i) * 0.5 + 0.5, flat.attributes.position.getZ(i) * 0.5 + 0.5);
+  flat.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  crumpleGeo = flat;
+  return flat;
+}
+
 export function buildClutter(ctx) {
   const items = [];
   const { H, M, root, kit } = ctx;
@@ -357,15 +460,16 @@ export function buildClutter(ctx) {
   const card = kit.make({ color: 0x8a6a45, rough: 0.95, dirt: 'hall' });
   const cardDark = kit.make({ color: 0x6e5236, rough: 0.95, dirt: 'hall' });
   const tape = kit.make({ color: 0xb59a6a, rough: 0.6 });
-  const plasterMat = kit.make({ color: 0xbab2a4, rough: 1, dirt: 'hall' });
-  const dustMat = kit.make({ color: 0x8f877a, rough: 1 });
+  const plasterMat = kit.make({ map: junkTexture('plaster'), rough: 1, dirt: 'hall' });
+  const printed = kit.make({ map: junkTexture('paper'), rough: 0.9, dirt: 'hall' });
+  const dustMat = kit.make({ map: junkTexture('plaster'), color: 0x6e665a, rough: 1, transparent: true, opacity: 0.85, depthWrite: false, dirt: 'hall' });
   const soil = kit.make({ color: 0x2a1c12, rough: 1 });
   const terracotta = kit.make({ color: 0x9a4a2c, rough: 0.8, dirt: 'hall' });
   const bottle = kit.make({ color: 0x1b3d27, rough: 0.12, metal: 0.05, envIntensity: 1.2 });
   const bottleBrown = kit.make({ color: 0x3a1e0c, rough: 0.12, metal: 0.05, envIntensity: 1.2 });
   const can = kit.make({ color: 0xa4202a, rough: 0.35, metal: 0.7 });
   const canSilver = kit.make({ color: 0xb8bcc0, rough: 0.3, metal: 0.85 });
-  const cardFace = kit.make({ color: 0xf1ece0, rough: 0.7 });
+  const cardFace = kit.make({ map: junkTexture('card'), rough: 0.6 });
   const cardBack = kit.make({ color: 0x7a1424, rough: 0.7 });
   const shard = kit.make({ color: 0xcfe0e4, rough: 0.05, metal: 0, transparent: true, opacity: 0.45, depthWrite: false, side: THREE.DoubleSide, envIntensity: 1.4 });
 
@@ -377,7 +481,7 @@ export function buildClutter(ctx) {
     b.build(g);
     g.rotation.z = Math.PI / 2.05;
     g.rotation.order = 'YXZ';
-    add(g, 0.55);
+    add(g, 0.55, ctx.addCollider(-5.4, 7.9, 1.1, 1.1, true));
   }
   // cajas de cartón apiladas (dos rincones)
   const boxes = (x, z, yaw, list, collider, real = null) => {
@@ -428,7 +532,7 @@ export function buildClutter(ctx) {
     H.cyl(b, M.wood(), 0.012, 0.012, 1.3, 0.1, 0.8, 0.0, { segments: 5, rz: -0.18 });
     H.box(b, M.cloth, 0.22, 0.14, 0.1, 0.0, 0.3, 0.0, { r: 0.04 });
     b.build(g);
-    add(g, 0.5);
+    add(g, 0.5, ctx.addCollider(-12.6, 10.2, 0.55, 0.55, true));
   }
   // taburetes volcados
   for (const [x, z, yaw] of [[8.7, -5.9, 0.7], [-4.3, -6.1, -1.1], [4.2, 2.6, 2.2]]) {
@@ -444,7 +548,8 @@ export function buildClutter(ctx) {
     H.cyl(b, M.leather, 0.19, 0.17, 0.08, 0, 0.68, 0, { segments: 18 });
     b.build(inner);
     g.add(inner);
-    add(g, 0.5);
+    // tumbado ocupa ~0,8 m a lo largo de su eje
+    add(g, 0.5, ctx.addCollider(x, z, Math.abs(Math.cos(yaw)) * 0.8 + 0.35, Math.abs(Math.sin(yaw)) * 0.8 + 0.35, true));
   }
   // macetero volcado con tierra derramada
   {
@@ -461,13 +566,13 @@ export function buildClutter(ctx) {
     for (let i = 0; i < 6; i++) H.sphere(b, soil, 0.04 + r() * 0.05, 0.3 + r() * 0.8, 0.02, (r() - 0.5) * 0.7, { segments: 5, sy: 0.6 });
     H.sphere(b, kit.make({ color: 0x3f4a26, rough: 0.9 }), 0.16, 0.75, 0.05, 0.1, { segments: 7, sx: 1.4, sy: 0.4 });
     b.build(g);
-    add(g, 0.5);
+    add(g, 0.5, ctx.addCollider(-4.7, 9.5, 0.6, 0.6, true));
   }
   // cascotes del techo y polvo de yeso (bajo una grieta)
   {
     const g = at(1.7, -6.5);
     const b = new Batch();
-    H.sphere(b, dustMat, 0.55, 0, 0, 0, { segments: 14, sx: 1.2, sy: 0.08, sz: 0.9 });
+    H.sphere(b, dustMat, 0.55, 0, 0, 0, { segments: 14, sx: 1.2, sy: 0.04, sz: 0.9 });
     const chunk = new THREE.DodecahedronGeometry(1, 0);
     for (let i = 0; i < 14; i++) {
       const s = 0.04 + r() * 0.09;
@@ -510,9 +615,13 @@ export function buildClutter(ctx) {
         // fichas de casino
         for (let k = 0; k < 4; k++) H.cyl(b, ctx.chip([0xb0162b, 0x1f5fa8, 0x1a7a45, 0x111111][k]), 0.02, 0.02, 0.004, x + (r() - 0.5) * 0.3, 0.003, z + (r() - 0.5) * 0.3, { segments: 12 });
       } else if (kind === 4) {
-        // hoja de papel (plana y algo doblada)
-        H.box(b, M.paper, 0.21, 0.002, 0.297, x, 0.004, z, { r: 0, ry: yaw, rx: (r() - 0.5) * 0.12 });
-      } else H.sphere(b, M.paper, 0.05 + r() * 0.04, x, 0.045, z, { segments: 6, sx: 1.25, sy: 0.75, sz: 1.05 });
+        // hoja de papel impresa (plana y algo doblada)
+        H.box(b, printed, 0.21, 0.002, 0.297, x, 0.004, z, { r: 0, ry: yaw, rx: (r() - 0.5) * 0.12 });
+      } else {
+        // bola de papel arrugado
+        const k = 0.045 + r() * 0.03;
+        b.add(crumpledPaper(), printed, { x, y: k * 0.8, z, rx: r() * 3, ry: yaw, sx: k * 1.2, sy: k * 0.85, sz: k });
+      }
     }
     // cristales rotos junto a una botella
     for (let k = 0; k < 9; k++) {

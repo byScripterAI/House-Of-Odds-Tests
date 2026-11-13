@@ -37,6 +37,10 @@ const angleDiff = (a, b) => {
 const forward = (yaw) => ({ x: Math.sin(yaw), z: Math.cos(yaw) });
 const anchorKey = (a) => `${a.type}|${a.id ?? ''}|${a.seat ?? ''}|${a.x.toFixed(2)}|${a.z.toFixed(2)}`;
 
+const _frustum = new THREE.Frustum();
+const _pm = new THREE.Matrix4();
+const _sph = new THREE.Sphere(new THREE.Vector3(), 1.3);
+
 export class NpcSystem {
   /**
    * @param {{world: object, graphics: object, seed?: string}} opts
@@ -54,6 +58,7 @@ export class NpcSystem {
     this.spawnTimer = 2;
     this.group = new THREE.Group();
     this.group.name = 'npcs';
+    this.group.userData.noProbe = true; // no salen en los reflejos (ahorra compilar sus shaders dos veces)
     world.scene.add(this.group);
     this.talkingWith = null;
     this.#makeMaterial();
@@ -454,6 +459,10 @@ export class NpcSystem {
       if (customers < target && this.#entranceHidden(camera)) this.#spawnCustomer();
     }
 
+    if (camera) {
+      camera.updateMatrixWorld();
+      _frustum.setFromProjectionMatrix(_pm.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+    }
     for (const n of [...this.npcs]) {
       switch (n.state) {
         case 'walking':
@@ -497,6 +506,11 @@ export class NpcSystem {
       const d = angleDiff(n.yaw, n.targetYaw);
       n.yaw += d * Math.min(1, TURN_RATE * dt);
       n.rig.group.position.set(n.pos.x, this.world.floorHeight?.(n.pos.x, n.pos.z) ?? 0, n.pos.z);
+      // recorte por cámara (una esfera holgada por personaje): los que quedan a la espalda no se dibujan
+      if (camera && n.rig.model) {
+        _sph.center.set(n.pos.x, 0.95, n.pos.z);
+        n.rig.model.visible = _frustum.intersectsSphere(_sph);
+      }
       n.rig.group.rotation.y = n.yaw;
 
       // mirar al jugador cuando está cerca (o al hablar)

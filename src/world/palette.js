@@ -25,17 +25,26 @@ export function createPalette(kit, g, renderer) {
   const brushed = baked('brushed');
   const fabricBump = bumpNormal(Math.min(size, 512), { scale: 64, strength: 1.6, seed: 'fabric' });
 
+  /**
+   * Material de fábrica compartido: antes cada llamada creaba un material nuevo (idéntico) y el lote no podía
+   * fusionar las piezas → ~450 llamadas de dibujo de madera. Ahora es uno por casino; `{fresh:true}` da uno
+   * propio para quien necesite modificarlo.
+   */
+  const once = (fn) => {
+    let shared = null;
+    return (...args) => (args.some((a) => a?.fresh) ? fn() : (shared ??= fn()));
+  };
   const surface = (tex, o) => kit.make({ map: tex.map, roughnessMap: tex.roughnessMap, normalMap: tex.normalMap, bakedNormal: true, rough: 1, ...o });
 
   const M = {
     // losas de mármol de 1,2 m (la textura cubre 4×4 losas)
-    floor: () => surface(marble, { normalScale: 0.55, envIntensity: 1, clearcoat: clear ? 0.12 : 0, clearcoatRough: 0.2, dirt, worldUV: 4.8 }),
-    carpet: () => surface(rug, { normalScale: 0.8, envIntensity: 0.4, dirt, worldUV: 2.4 }),
-    wall: () => surface(silk, { normalScale: 0.35, envIntensity: 0.6, sheen: clear ? 0.35 : 0, sheenColor: 0xff8a90, dirt, worldUV: 2.4 }),
+    floor: once(() => surface(marble, { normalScale: 0.55, envIntensity: 1, clearcoat: clear ? 0.12 : 0, clearcoatRough: 0.2, dirt, worldUV: 4.8 })),
+    carpet: once(() => surface(rug, { normalScale: 0.8, envIntensity: 0.4, dirt, worldUV: 2.4 })),
+    wall: once(() => surface(silk, { normalScale: 0.35, envIntensity: 0.6, sheen: clear ? 0.35 : 0, sheenColor: 0xff8a90, dirt, worldUV: 2.4 })),
     wallPlain: kit.make({ color: 0x2a1a1c, rough: 0.85, dirt }),
     ceiling: surface(plaster, { normalScale: 0.4, envIntensity: 0.5, dirt, grimeStrength: 1.1, worldUV: 3 }),
-    wood: () => surface(walnut, { color: 0xffd2a8, normalScale: 0.45, envIntensity: 0.8, clearcoat: clear ? 0.2 : 0, dirt, worldUV: 1.6 }),
-    woodDark: () => surface(walnut, { normalScale: 0.45, envIntensity: 0.8, clearcoat: clear ? 0.25 : 0, dirt, worldUV: 1.6 }),
+    wood: once(() => surface(walnut, { color: 0xffd2a8, normalScale: 0.45, envIntensity: 0.8, clearcoat: clear ? 0.2 : 0, dirt, worldUV: 1.6 })),
+    woodDark: once(() => surface(walnut, { normalScale: 0.45, envIntensity: 0.8, clearcoat: clear ? 0.25 : 0, dirt, worldUV: 1.6 })),
     gold: kit.make({ color: PALETTE.gold, metal: 1, rough: 0.4, envIntensity: 0.75, dirt }),
     brass: surface(brushed, { metal: 1, color: 0xd9b986, envIntensity: 0.8, dirt, worldUV: 1 }),
     chrome: kit.make({ color: 0xb9bcc0, metal: 1, rough: 0.26, envIntensity: 0.8, dirt }),
@@ -48,8 +57,8 @@ export function createPalette(kit, g, renderer) {
     velvet: kit.make({ color: 0x6a0f20, rough: 0.92, normalMap: fabricBump, normalScale: 0.4, sheen: 0.7, sheenColor: 0xff7088, dirt }),
     velvetGreen: kit.make({ color: 0x0d4032, rough: 0.92, sheen: 0.5, sheenColor: 0x70ffc0, dirt }),
     leather: surface(leatherTex, { normalScale: 0.6, envIntensity: 0.7, clearcoat: clear ? 0.15 : 0, dirt, worldUV: 0.8 }),
-    feltGreen: () => kit.make({ map: felt(Math.min(size, 512)), rough: 1, dirt }),
-    feltRed: () => kit.make({ map: felt(Math.min(size, 512), [112, 18, 36]), rough: 1, dirt }),
+    feltGreen: once(() => kit.make({ map: felt(Math.min(size, 512)), rough: 1, dirt })),
+    feltRed: once(() => kit.make({ map: felt(Math.min(size, 512), [112, 18, 36]), rough: 1, dirt })),
     glass: kit.make({ color: 0xbfd4d6, metal: 0, rough: 0.05, transparent: true, opacity: 0.16, depthWrite: false }),
     cloth: kit.make({ color: 0xa69d8a, rough: 1, normalMap: fabricBump, bakedNormal: true, normalScale: 0.7, side: THREE.DoubleSide, dirt, grimeStrength: 1.3 }),
     paper: kit.make({ color: 0xb9b2a2, rough: 1, dirt }),

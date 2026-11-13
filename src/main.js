@@ -5,11 +5,13 @@ import { App } from './app.js';
 import { SaveManager } from './save/save-manager.js';
 import { showFatalError } from './ui/fatal-error.js';
 import { DebugOverlay } from './ui/debug-overlay.js';
-import { loadCharacters, loadCustomers } from './entities/character-assets.js';
-import { detectQuality } from './core/hardware.js';
+import { characterTemplates, loadCharacters, loadCustomers } from './entities/character-assets.js';
+import { DETECT_VERSION, detectQuality } from './core/hardware.js';
 import { loadProps } from './world/props/assets.js';
 import { loadModels } from './world/props/models.js';
 import { loadNeonFont } from './world/neon.js';
+import { loadArt } from './world/props/decor.js';
+import { createWorld } from './world/world.js';
 
 /** Punto de entrada. Solo cablea módulos; no contiene lógica de juego. */
 
@@ -76,16 +78,21 @@ async function main() {
   i18n.init(); // idioma guardado, o detectado la primera vez (inglés si no es uno de los 6)
   document.documentElement.lang = i18n.lang;
   const stopTips = startTips();
+  const tagline = document.getElementById('boot-tagline');
+  if (tagline) tagline.textContent = t('ui.menu.tagline');
+  const tipLabel = document.getElementById('boot-tiplabel');
+  if (tipLabel) tipLabel.textContent = t('boot.tipLabel');
   const ver = document.getElementById('boot-version');
   if (ver) ver.textContent = `v${GAME.version}${GAME.stage ? ` · ${t('ui.beta.badge')}` : ''}`;
   const save = new SaveManager();
   const settings = save.loadSettings();
   // calidad automática: la primera vez se mide el equipo (un PC modesto no arranca en MEDIA y se atasca)
   let autoDetected = null;
-  if (settings.graphics.auto && !settings.graphics.detected) {
+  if (settings.graphics.auto && (!settings.graphics.detected || settings.graphics.detectVersion !== DETECT_VERSION)) {
     const { tier, signals } = detectQuality();
     settings.graphics.quality = tier;
     settings.graphics.detected = tier;
+    settings.graphics.detectVersion = DETECT_VERSION;
     if (tier === 'veryLow') settings.graphics.renderScale = Math.min(settings.graphics.renderScale, 0.75);
     save.saveSettings(settings);
     autoDetected = tier;
@@ -102,20 +109,32 @@ async function main() {
   let kc = 0;
   let kp = 0;
   let km = 0;
-  const bar = () => setProgress(0.4 + (kc * 0.7 + kp * 0.15 + km * 0.15) * 0.48);
-  await Promise.all([loadCharacters((k) => ((kc = k), bar())), loadProps((k) => ((kp = k), bar())), loadModels((k) => ((km = k), bar())), loadNeonFont()]);
+  const bar = () => setProgress(0.4 + (kc * 0.7 + kp * 0.15 + km * 0.15) * 0.3);
+  await Promise.all([loadCharacters((k) => ((kc = k), bar())), loadProps((k) => ((kp = k), bar())), loadModels((k) => ((km = k), bar())), loadNeonFont(), loadArt()]);
 
-  await onProgress(0.9, 'boot.casino');
-  const app = new App({ game, uiRoot, save });
+  await onProgress(0.7, 'boot.casino');
+  // el casino se construye por pasos (la página sigue respondiendo) y luego se «calienta»: shaders, texturas
+  // y reflejos listos ANTES de enseñar el menú, así el primer fotograma no se congela
+  const world = createWorld({ renderer: game.renderer.webgl, graphics: game.renderer.settings });
+  await world.load((f) => setProgress(0.7 + f * 0.16));
+  const app = new App({ game, uiRoot, save, world });
   const overlay = new DebugOverlay({ root: uiRoot, game });
-
   app.start();
-  // shaders compilados en paralelo antes de mostrar nada: el primer fotograma no se congela
-  await app.world.precompile();
+  await onProgress(0.86, 'boot.shaders');
+  await world.warmup((f) => setProgress(0.86 + f * 0.12));
   game.start();
+  // dos fotogramas reales bajo la cortina (sombras, post-proceso, personajes del menú)
+  await nextFrame();
+  await nextFrame();
+  await nextFrame();
 
   // clientes en segundo plano (solo hacen falta tras la reapertura)
-  loadCustomers().then(() => app.npcs?.onCustomersLoaded?.());
+  // (se esperan unos segundos para no competir con el primer vistazo al menú; sus shaders se compilan por trozos)
+  setTimeout(() => {
+    loadCustomers()
+      .then(() => world.warmObjects(characterTemplates()))
+      .then(() => app.npcs?.onCustomersLoaded?.());
+  }, 4000);
 
   if (autoDetected) app.notifyAutoQuality?.(autoDetected);
 

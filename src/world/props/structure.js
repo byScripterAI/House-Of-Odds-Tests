@@ -1,6 +1,12 @@
 import * as THREE from 'three';
-import { tiledBox, tiledPlane } from '../../gfx/geometry.js';
+import { extrudeProfile, moldedFrame, tiledBox, tiledPlane } from '../../gfx/geometry.js';
+
+/** Perfiles de molduras (u = vuelo desde la pared, v = altura). */
+const CHAIR_RAIL = [[0, 0], [0.028, 0], [0.034, 0.008], [0.046, 0.016], [0.052, 0.03], [0.05, 0.045], [0.04, 0.056], [0.028, 0.06], [0.016, 0.072], [0, 0.074]];
+const BASEBOARD = [[0, 0], [0.034, 0], [0.034, 0.1], [0.028, 0.112], [0.018, 0.13], [0.01, 0.142], [0, 0.146]];
+const PANEL = [[0, 0], [0, 0.008], [0.008, 0.016], [0.018, 0.018], [0.026, 0.012], [0.03, 0.004], [0.032, 0]];
 import { COUNTER, DOORS, HALL, PILASTERS, RECEPTION, doorPlacement, doorsOn, wallRuns } from '../layout.js';
+import { batchModel, hasModel, paletteRemap } from './models.js';
 
 const DOOR_H = 3.0;
 
@@ -58,27 +64,20 @@ export function buildShell(ctx) {
       const px = alongX ? c : off;
       const pz = alongX ? off : c;
       B.add(H.geo(`wain|${sx.toFixed(3)}|${sz.toFixed(3)}`, () => tiledBox(sx, 1.15, sz, 1.2)), M.woodDark([1, 1]), { x: px, y: 0.575, z: pz });
-      // paneles en relieve: marcos de 1,2 m con moldura
+      // paneles en relieve: marcos de 1,2 m con moldura de verdad (ingletes en las esquinas)
       const panels = Math.max(1, Math.round(len / 1.2));
       const pw = len / panels;
+      const facing = alongX ? (face > 0 ? 0 : Math.PI) : face > 0 ? Math.PI / 2 : -Math.PI / 2;
+      const panelGeo = H.geo(`panel|${(pw - 0.24).toFixed(3)}`, () => moldedFrame(pw - 0.24, 0.84, PANEL));
       for (let k = 0; k < panels; k++) {
         const pc = a + pw * (k + 0.5);
-        const fo = fixed + face * 0.088;
-        const fx = alongX ? pc : fo;
-        const fz = alongX ? fo : pc;
-        const across = (l) => (alongX ? [l, 0.025] : [0.025, l]);
-        const [h1x, h1z] = across(pw - 0.24);
-        H.box(B, M.woodDark(), h1x, 0.045, h1z, fx, 0.98, fz, { r: 0 });
-        H.box(B, M.woodDark(), h1x, 0.045, h1z, fx, 0.2, fz, { r: 0 });
-        const off = (pw - 0.24) / 2;
-        for (const sgn of [-1, 1]) {
-          H.box(B, M.woodDark(), alongX ? 0.045 : 0.025, 0.82, alongX ? 0.025 : 0.045, alongX ? pc + sgn * off : fo, 0.59, alongX ? fo : pc + sgn * off, { r: 0 });
-        }
+        const fo = fixed + face * 0.08;
+        B.add(panelGeo, M.woodDark(), { x: alongX ? pc : fo, y: 0.59, z: alongX ? fo : pc, ry: facing });
       }
-      const mx = alongX ? len : 0.13;
-      const mz = alongX ? 0.13 : len;
-      B.add(H.geo(`mold|${mx.toFixed(3)}|${mz.toFixed(3)}`, () => new THREE.BoxGeometry(mx, 0.05, mz)), M.gold, { x: alongX ? c : fixed + face * 0.065, y: 1.17, z: alongX ? fixed + face * 0.065 : c });
-      B.add(H.geo(`base|${mx.toFixed(3)}|${mz.toFixed(3)}`, () => new THREE.BoxGeometry(mx + (alongX ? 0 : 0.04), 0.14, mz + (alongX ? 0.04 : 0))), M.black, { x: alongX ? c : fixed + face * 0.07, y: 0.07, z: alongX ? fixed + face * 0.07 : c });
+      // tapajuntas (moldura dorada) y rodapié negro, con perfil
+      const rot = alongX ? (face > 0 ? 0 : Math.PI) : face > 0 ? Math.PI / 2 : -Math.PI / 2;
+      B.add(H.geo(`rail|${len.toFixed(3)}`, () => extrudeProfile(CHAIR_RAIL, len)), M.gold, { x: alongX ? c : fixed + face * 0.08, y: 1.13, z: alongX ? fixed + face * 0.08 : c, ry: rot });
+      B.add(H.geo(`baseb|${len.toFixed(3)}`, () => extrudeProfile(BASEBOARD, len + 0.04)), M.black, { x: alongX ? c : fixed + face * 0.08, y: 0, z: alongX ? fixed + face * 0.08 : c, ry: rot });
     }
   };
   wain(true, minX, maxX, minZ, 1);
@@ -167,9 +166,17 @@ export function buildShell(ctx) {
 /** Pilastras acanaladas con capitel dorado y aplique (algunos apagados). */
 export function buildPilasters(ctx) {
   const { H, M, B } = ctx;
+  const modeled = hasModel('pilaster');
   PILASTERS.forEach((p, i) => {
     const inward = p.side === 'west' ? 1 : -1;
     const A = B.at({ x: p.x, z: p.z, yaw: p.side === 'west' ? Math.PI / 2 : -Math.PI / 2 });
+    const alive = (i * 5 + 3) % 7 !== 0 && (i * 3 + 1) % 5 !== 0;
+    if (modeled) {
+      // pilastra modelada (basa escalonada, fuste acanalado, capitel con abanico y aplique de tulipa)
+      batchModel(A, 'pilaster', paletteRemap(ctx, { sconceGlass: alive ? M.bulb : M.sconceDead }));
+      ctx.sconces.push({ x: p.x + inward * 0.35, y: 2.78, z: p.z, alive });
+      return;
+    }
     // local +Z apunta hacia el interior del salón
     H.box(A, M.marble, 0.66, 0.34, 0.66, 0, 0.17, 0, { r: 0.02 });
     H.box(A, M.gold, 0.7, 0.05, 0.7, 0, 0.36, 0, { r: 0.01 });
@@ -178,7 +185,6 @@ export function buildPilasters(ctx) {
     H.box(A, M.gold, 0.66, 0.22, 0.6, 0, 5.1, 0, { r: 0.03 });
     H.box(A, M.marble, 0.72, 0.12, 0.66, 0, 5.28, 0, { r: 0.02 });
     // aplique
-    const alive = (i * 5 + 3) % 7 !== 0 && (i * 3 + 1) % 5 !== 0;
     H.box(A, M.brass, 0.1, 0.22, 0.06, 0, 2.55, 0.2, { r: 0.01 });
     H.cyl(A, alive ? M.bulb : M.sconceDead, 0.07, 0.1, 0.2, 0, 2.78, 0.26, { segments: 12 });
     ctx.sconces.push({ x: p.x + inward * 0.35, y: 2.78, z: p.z, alive });
@@ -191,6 +197,11 @@ export function buildCounter(ctx) {
   const c = COUNTER;
   const A = B.at({ x: c.x, z: c.z, yaw: 0 }); // frente hacia +Z
   const wdt = c.width;
+  const mirror = ctx.kit.make({ color: 0x8a8580, metal: 1, rough: 0.14, envIntensity: 0.55, dirt: 'hall' });
+  // mueble modelado: frente de paneles con rombos, encimera de mármol, barandilla y reposapiés, mueble bar con
+  // arcos de espejo, baldas y mamparas laterales de cristal
+  const modeled = hasModel('counter') && batchModel(A, 'counter', paletteRemap(ctx, { mirror, glass: M.glass }));
+  if (!modeled) {
   // cuerpo con paneles acanalados
   H.box(A, M.woodDark([1, 1]), wdt, 1.05, c.depth, 0, 0.525, 0, { r: 0.02 });
   for (let i = 0; i < Math.round(wdt / 0.18); i++) H.box(A, M.wood([1, 1]), 0.07, 0.8, 0.03, -wdt / 2 + 0.2 + i * 0.18, 0.55, c.depth / 2 + 0.01, { r: 0.01 });
@@ -198,6 +209,7 @@ export function buildCounter(ctx) {
   H.box(A, M.gold, wdt + 0.16, 0.025, c.depth + 0.42, 0, 1.04, 0.15, { r: 0.006 });
   H.cyl(A, M.brass, 0.03, 0.03, wdt - 0.2, 0, 0.14, c.depth / 2 + 0.28, { segments: 10, rz: Math.PI / 2 }); // barra para los pies
   for (const x of [-wdt / 2 + 0.3, 0, wdt / 2 - 0.3]) H.cyl(A, M.brass, 0.025, 0.025, 0.14, x, 0.07, c.depth / 2 + 0.28, { segments: 8 });
+  }
   // terminal y campanilla sobre el mostrador
   H.box(A, M.carbon, 0.46, 0.32, 0.3, -1.3, 1.28, 0.1, { r: 0.02, rx: -0.2 });
   H.box(A, M.screenGlow, 0.38, 0.22, 0.01, -1.3, 1.3, 0.255, { r: 0 });
@@ -205,10 +217,11 @@ export function buildCounter(ctx) {
   H.sphere(A, M.brass, 0.05, 0.9, 1.19, 0.2, { segments: 10, sy: 0.7 });
   // trasera: estanterías, botellas y espejo
   const backZ = -c.depth / 2 - 0.6;
-  H.box(A, M.woodDark([1, 1]), wdt + 0.6, 2.9, 0.18, 0, 1.45, backZ - 0.2, { r: 0.02 });
-  const mirror = ctx.kit.make({ color: 0x8a8580, metal: 1, rough: 0.14, envIntensity: 0.55, dirt: 'hall' });
-  H.box(A, mirror, wdt - 0.5, 1.15, 0.02, 0, 2.28, backZ - 0.1, { r: 0 });
-  for (const y of [1.3, 1.78]) H.box(A, M.wood([1, 1]), wdt - 0.4, 0.045, 0.34, 0, y, backZ + 0.02, { r: 0.008 });
+  if (!modeled) {
+    H.box(A, M.woodDark([1, 1]), wdt + 0.6, 2.9, 0.18, 0, 1.45, backZ - 0.2, { r: 0.02 });
+    H.box(A, mirror, wdt - 0.5, 1.15, 0.02, 0, 2.28, backZ - 0.1, { r: 0 });
+    for (const y of [1.3, 1.78]) H.box(A, M.wood([1, 1]), wdt - 0.4, 0.045, 0.34, 0, y, backZ + 0.02, { r: 0.008 });
+  }
   // botellas con etiqueta y cápsula, vasos boca abajo y tira de luz cálida bajo cada balda
   const label = ctx.kit.make({ color: 0xe8dcc0, rough: 0.8 });
   const capsule = ctx.kit.make({ color: 0x7a1622, rough: 0.4, metal: 0.3 });
@@ -231,6 +244,7 @@ export function buildCounter(ctx) {
     }
     H.box(A, M.cove, wdt - 0.5, 0.012, 0.02, 0, y - 0.052, backZ + 0.17, { r: 0 });
   }
+  if (!modeled) {
   // barandilla de latón en el borde del mostrador
   H.cyl(A, M.brass, 0.018, 0.018, wdt - 0.1, 0, 1.17, c.depth / 2 + 0.32, { segments: 10, rz: Math.PI / 2 });
   for (const x of [-wdt / 2 + 0.2, -wdt / 4, wdt / 4, wdt / 2 - 0.2]) H.cyl(A, M.brass, 0.012, 0.012, 0.06, x, 1.14, c.depth / 2 + 0.32, { segments: 8 });
@@ -240,6 +254,7 @@ export function buildCounter(ctx) {
     H.box(A, M.woodDark([1, 1]), 0.1, 1.2, 2.2, x, 0.6, -1.0, { r: 0.015 });
     H.box(A, M.glass, 0.04, 1.1, 2.1, x, 1.75, -1.0, { r: 0 });
     H.box(A, M.gold, 0.12, 0.04, 2.2, x, 1.22, -1.0, { r: 0.005 });
+  }
   }
   // anclas: el empleado detrás del mostrador; el cliente delante
   anchors.push({ type: 'counter-clerk', x: c.x, z: c.z - 0.8, yaw: 0 });
@@ -258,6 +273,10 @@ export function buildReception(ctx) {
   const W = r.width;
   const D = r.depth;
   const fz = D / 2;
+  // mueble modelado: frente acanalado de estadio con aros de latón, placa con rombo, encimera y repisa de
+  // mármol, columnas torneadas en las esquinas
+  const modeled = hasModel('reception') && batchModel(A, 'reception', paletteRemap(ctx));
+  if (!modeled) {
   // cuerpo
   H.box(A, M.lacquer, W - 0.08, 0.1, D - 0.08, 0, 0.05, -0.02, { r: 0.01 });
   H.box(A, M.woodDark([1, 1]), W, 0.92, D, 0, 0.56, 0, { r: 0.02 });
@@ -277,6 +296,7 @@ export function buildReception(ctx) {
   H.box(A, M.woodDark([1, 1]), W - 0.1, 0.16, 0.08, 0, 1.13, fz - 0.06, { r: 0.01 });
   H.box(A, M.marbleLight, W + 0.12, 0.035, 0.36, 0, 1.225, fz + 0.04, { r: 0.012 });
   H.box(A, M.gold, W + 0.14, 0.015, 0.37, 0, 1.2, fz + 0.04, { r: 0.004 });
+  }
   // campanilla
   H.cyl(A, M.black, 0.06, 0.065, 0.015, -1.3, 1.25, fz + 0.06, { segments: 16 });
   H.lathe(A, M.brass, [[0, 0], [0.055, 0], [0.05, 0.03], [0.03, 0.05], [0.006, 0.058], [0.006, 0.075], [0, 0.078]], -1.3, 1.257, fz + 0.06, { segments: 18 });

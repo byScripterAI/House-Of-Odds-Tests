@@ -5,6 +5,7 @@ export default {
   'boot.renderer': 'A iniciar o renderizador…',
   'boot.loop': 'A preparar o ciclo de jogo…',
   'boot.casino': 'A construir o casino…',
+  'boot.shaders': 'A acender as luzes…',
   'boot.characters': 'A chegar o pessoal…',
   'boot.ready': 'Pronto',
   'fatal.webgl.title': 'Gráficos 3D indisponíveis',

@@ -14,7 +14,7 @@ export const seg = (detail, n, min = 3) => Math.max(min, Math.round(n * detail))
 
 export function roundedBox(w, h, d, r, detail = 1) {
   const radius = Math.min(r, w / 2 - 1e-4, h / 2 - 1e-4, d / 2 - 1e-4);
-  return new RoundedBoxGeometry(w, h, d, detail >= 1 ? 3 : 1, Math.max(0.001, radius));
+  return new RoundedBoxGeometry(w, h, d, detail >= 1.4 ? 3 : detail >= 1 ? 2 : 1, Math.max(0.001, radius));
 }
 
 /** Quita atributos que no comparten todas las piezas para poder fusionarlas. */
@@ -185,5 +185,61 @@ export function tiledPlane(w, d, tile = 2.4) {
   const g = new THREE.PlaneGeometry(w, d);
   const uv = g.attributes.uv;
   for (let i = 0; i < uv.count; i++) uv.setXY(i, (uv.getX(i) * w) / tile, (uv.getY(i) * d) / tile);
+  return g;
+}
+
+/**
+ * Marco moldurado con ingletes (como un marco de verdad): barre un perfil por los cuatro lados de un rectángulo.
+ * `profile`: [[u, v]…] de fuera hacia dentro (u = distancia hacia dentro desde el canto exterior, v = relieve).
+ * El rectángulo exterior mide w × h, en el plano XY, con el relieve hacia +Z.
+ */
+export function moldedFrame(w, h, profile) {
+  const sides = [
+    { o: [-w / 2, h / 2], a: [1, 0], n: [0, -1], len: w },
+    { o: [w / 2, h / 2], a: [0, -1], n: [-1, 0], len: h },
+    { o: [w / 2, -h / 2], a: [-1, 0], n: [0, 1], len: w },
+    { o: [-w / 2, -h / 2], a: [0, 1], n: [1, 0], len: h },
+  ];
+  const parts = [];
+  // longitud acumulada del perfil (para la UV)
+  const acc = [0];
+  for (let i = 1; i < profile.length; i++) acc.push(acc[i - 1] + Math.hypot(profile[i][0] - profile[i - 1][0], profile[i][1] - profile[i - 1][1]));
+  for (const s of sides) {
+    const pos = [];
+    const uv = [];
+    const idx = [];
+    profile.forEach(([u, v], i) => {
+      // los dos extremos del tramo, recortados en inglete (u hacia dentro y u a lo largo)
+      for (const end of [0, 1]) {
+        const along = end ? s.len - u : u;
+        pos.push(s.o[0] + s.a[0] * along + s.n[0] * u, s.o[1] + s.a[1] * along + s.n[1] * u, v);
+        uv.push(along / 0.3, acc[i] / 0.1);
+      }
+    });
+    for (let i = 0; i < profile.length - 1; i++) {
+      const a = i * 2;
+      idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    g.setIndex(idx);
+    g.computeVertexNormals();
+    parts.push(g);
+  }
+  const merged = mergeGeometries(parts, false);
+  for (const g of parts) g.dispose();
+  return merged;
+}
+
+/**
+ * Moldura recta: extruye un perfil a lo largo de X (centrada). `profile`: [[u, v]…] con u = vuelo hacia +Z
+ * (saliendo de la pared) y v = altura. Para zócalos, rodapiés, cornisas y vigas con perfil de verdad.
+ */
+export function extrudeProfile(profile, len) {
+  const shape = new THREE.Shape(profile.map(([u, v]) => new THREE.Vector2(-u, v)));
+  const g = new THREE.ExtrudeGeometry(shape, { depth: len, bevelEnabled: false, curveSegments: 1 });
+  g.rotateY(Math.PI / 2);
+  g.translate(-len / 2, 0, 0);
   return g;
 }

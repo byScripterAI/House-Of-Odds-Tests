@@ -6,6 +6,7 @@ export default {
   'boot.renderer': 'Initializing renderer…',
   'boot.loop': 'Preparing the game loop…',
   'boot.casino': 'Building the casino…',
+  'boot.shaders': 'Turning on the lights…',
   'boot.characters': 'Bringing in the staff…',
   'boot.ready': 'Ready',
   'fatal.webgl.title': '3D graphics unavailable',

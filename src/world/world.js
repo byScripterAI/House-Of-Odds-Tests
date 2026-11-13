@@ -19,9 +19,11 @@ import { buildDamage } from './props/damage.js';
 import { buildDecorSets } from './props/decor-sets.js';
 import { armchair, bench, coffeeTable, floorLamp, plant, sofa, workbench, workbenchWall } from './props/furniture.js';
 import { createHelpers } from './props/helpers.js';
+import { batchModel, hasModel, matKey, paletteRemap } from './props/models.js';
 import { DOOR_H, buildCounter, buildPilasters, buildReception, buildShell, doorFrame } from './props/structure.js';
 import { blackjackTable, rouletteTable } from './props/tables.js';
 import { buildStoryItems } from './props/story-items.js';
+import { waterReflection } from './props/water.js';
 import { STORY_SPOTS } from './layout.js';
 
 /**
@@ -48,6 +50,20 @@ const LIGHT_LEVELS = [0.3, 0.56, 0.62, 0.68];
 const GLOW_LEVELS = [0.24, 0.42, 0.48, 0.54];
 const BUILD_KEYS = ['material', 'detail', 'textureSize', 'propDensity', 'reflections', 'dynamicLights', 'particleScale'];
 const buildSignature = (g) => BUILD_KEYS.map((k) => g[k]).join('|');
+/** Nº aproximado de pasos de la construcción (para la barra de carga). */
+const BUILD_STEPS = 40;
+/** Cede el hilo al navegador (pinta la barra y atiende la página). En pestaña oculta no espera al fotograma. */
+export const breathe = () => new Promise((resolve) => {
+  let done = false;
+  const go = () => {
+    if (!done) {
+      done = true;
+      resolve();
+    }
+  };
+  requestAnimationFrame(() => setTimeout(go, 0));
+  setTimeout(go, 60);
+});
 
 export function createWorld({ renderer, graphics }) {
   const scene = new THREE.Scene();
@@ -63,6 +79,9 @@ export function createWorld({ renderer, graphics }) {
   const dirt = { hall: { value: 1 } };
 
   const envTarget = buildEnvironment(renderer);
+  // reflejo plano de los charcos (solo ALTA y ULTRA): uno compartido, se crea una vez
+  let waterRefl = null;
+  envTarget.texture.isPMREMTexture = true;
   const state = {
     g: graphics,
     signature: buildSignature(graphics),
@@ -79,7 +98,37 @@ export function createWorld({ renderer, graphics }) {
   const handlers = { onReelStop: null, onTick: null, onDone: null };
 
   // ======================================================================== construcción
+  /** Construcción síncrona (reconstrucción al cambiar la calidad, tras el velo «aplicando calidad…»). */
   function build(g) {
+    const it = buildSteps(g);
+    let r = it.next();
+    while (!r.done) r = it.next();
+    return r.value;
+  }
+
+  /**
+   * Construcción POR PASOS para la pantalla de carga: cede el hilo al navegador cada pocos milisegundos,
+   * así la página nunca se queda «sin responder» en un PC modesto y la barra avanza de verdad.
+   */
+  async function buildAsync(g, onProgress = () => {}) {
+    const it = buildSteps(g);
+    let t0 = performance.now();
+    let n = 0;
+    let r = it.next();
+    while (!r.done) {
+      n++;
+      if (performance.now() - t0 > 24) {
+        onProgress(Math.min(0.99, n / BUILD_STEPS));
+        await breathe();
+        t0 = performance.now();
+      }
+      r = it.next();
+    }
+    onProgress(1);
+    return r.value;
+  }
+
+  function* buildSteps(g) {
     const root = new THREE.Group();
     root.name = 'casino';
     scene.add(root);
@@ -90,8 +139,10 @@ export function createWorld({ renderer, graphics }) {
     const H = createHelpers(g.detail);
     const batch = new Batch();
     const chipMats = new Map();
+    if (g.textureSize >= 1024) waterRefl ??= waterReflection(renderer, scene);
     const ctx = {
       g, kit, M, H, B: batch, root, anchors, track,
+      waterReflection: g.textureSize >= 1024 ? waterRefl : null,
       dynamic: [], decalMats: [], sconces: [],
       seg: (n) => seg(g.detail, n, 6),
       chip(color) {
@@ -135,21 +186,32 @@ export function createWorld({ renderer, graphics }) {
       return entry;
     };
 
+    yield;
     // ---------------- estructura
     buildShell(ctx);
+    yield;
     buildPilasters(ctx);
     buildCounter(ctx);
+    yield;
     buildReception(ctx);
+    yield;
 
     // ---------------- mesas y máquinas antiguas
-    TABLES.blackjack.forEach((tb, i) => blackjackTable(ctx, tb, { id: tb.id, felt: i === 1 ? 'red' : 'green' }));
-    TABLES.roulette.forEach((tb) => rouletteTable(ctx, tb, { id: tb.id, wheel: false }));
+    for (const [i, tb] of TABLES.blackjack.entries()) {
+      blackjackTable(ctx, tb, { id: tb.id, felt: i === 1 ? 'red' : 'green' });
+      yield;
+    }
+    for (const tb of TABLES.roulette) {
+      rouletteTable(ctx, tb, { id: tb.id, wheel: false });
+      yield;
+    }
     // ruedas reales también en las mesas de ambiente (giran despacio); la jugable la pone TableController
     const wheels = TABLES.roulette.filter((tb) => tb.id !== 'royal_roulette').map((tb) => track(new RouletteView({ scene: root, table: tb })));
     let bankIndex = 0;
     for (const bank of SLOT_BANKS) {
       slotBank(ctx, bank, bankIndex);
       bankIndex += bank.count * 2;
+      yield;
     }
 
     // ---------------- salón (suroeste) y decoración fija
@@ -158,8 +220,8 @@ export function createWorld({ renderer, graphics }) {
     for (const a of LOUNGE.armchairs) anchors.push({ type: 'armchair', x: a.x, z: a.z, yaw: a.yaw, sitY: 0.45 });
     if (!placeProp(ctx, 'coffee_table', { x: LOUNGE.table.x, z: LOUNGE.table.z })) coffeeTable(ctx, batch.at(LOUNGE.table));
     if (placeProp(ctx, 'sofa', { x: -10.7, z: 10.45, yaw: Math.PI })) {
-      colliders.push({ minX: -11.5, maxX: -9.9, minZ: 10.1, maxZ: 10.8, enabled: true });
-      anchors.push({ type: 'armchair', x: -11.09, z: 10.35, yaw: Math.PI, sitY: 0.44 }, { type: 'armchair', x: -10.31, z: 10.35, yaw: Math.PI, sitY: 0.44 });
+      colliders.push({ minX: -11.7, maxX: -9.7, minZ: 10.0, maxZ: 10.9, enabled: true });
+      anchors.push({ type: 'armchair', x: -11.19, z: 10.33, yaw: Math.PI, sitY: 0.53 }, { type: 'armchair', x: -10.21, z: 10.33, yaw: Math.PI, sitY: 0.53 });
     }
     hangChandelier(ctx, 'chandelier_01', { x: LOUNGE.table.x, z: LOUNGE.table.z, scale: 1.25, bottom: 3.2 });
     for (const z of [6.3, 10.2]) floorLamp(ctx, batch.at({ x: -13.1, z }));
@@ -176,6 +238,7 @@ export function createWorld({ renderer, graphics }) {
       anchors.push({ type: 'bench', x, z: 10.55, yaw: Math.PI, sitY: 0.5 });
     }
 
+    yield;
     // ---------------- puesto de mantenimiento (Daniel)
     if (placeProp(ctx, 'work_table', { x: 13.4, z: 0.8, yaw: Math.PI / 2 })) {
       // mesa de taller real (pintada y gastada) y en la pared el tablero de herramientas
@@ -187,15 +250,22 @@ export function createWorld({ renderer, graphics }) {
     }
     anchors.push({ type: 'workbench', x: 12.35, z: 0.8, yaw: Math.PI / 2 });
 
+    yield;
     // ---------------- cuadros (uno torcido y otro caído: el local está descuidado)
-    const paintings = [
-      painting(ctx, { x: HALL.minX + 0.05, y: 2.6, z: 1.0, yaw: Math.PI / 2, seed: 'art-1' }),
-      painting(ctx, { x: HALL.maxX - 0.05, y: 2.6, z: -9.8, yaw: -Math.PI / 2, seed: 'art-2', crooked: 0.09 }), // encima del taller de Daniel va su tablero de herramientas
-      painting(ctx, { x: -9, y: 2.6, z: HALL.maxZ - 0.05, yaw: Math.PI, seed: 'art-3' }),
-      painting(ctx, { x: 5.6, y: 2.6, z: HALL.maxZ - 0.05, yaw: Math.PI, seed: 'art-4', crooked: -0.06 }),
+    const paintingSpecs = [
+      { x: HALL.minX + 0.05, y: 2.6, z: 1.0, yaw: Math.PI / 2, seed: 'art-1' },
+      { x: HALL.maxX - 0.05, y: 2.6, z: -9.8, yaw: -Math.PI / 2, seed: 'art-2', crooked: 0.09 }, // encima del taller de Daniel va su tablero de herramientas
+      { x: -9, y: 2.6, z: HALL.maxZ - 0.05, yaw: Math.PI, seed: 'art-3' },
+      { x: 5.6, y: 2.6, z: HALL.maxZ - 0.05, yaw: Math.PI, seed: 'art-4', crooked: -0.06 },
     ];
+    const paintings = [];
+    for (const spec of paintingSpecs) {
+      paintings.push(painting(ctx, spec));
+      yield;
+    }
     const crooked = [paintings[1], paintings[3]].map((p) => ({ p, rest: p.rotation.z }));
     const fallen = painting(ctx, { x: 12.9, y: 0.75, z: -1.9, yaw: -Math.PI / 2 + 0.2, seed: 'art-5', w: 1.2, h: 1.5 });
+    yield;
     fallen.rotation.x = -0.32;
 
     // ---------------- estrado y THE CLASSIC
@@ -216,6 +286,7 @@ export function createWorld({ renderer, graphics }) {
     root.add(pool);
     interactables.push({ id: 'machine', pos: new THREE.Vector3(CLASSIC.x, 1.2, CLASSIC.z + 1.0), radius: 3.0, prompt: { key: 'E', textKey: 'prompt.machine', params: { machine: 'THE CLASSIC' } } });
 
+    yield;
     // ---------------- mostrador: rótulo, interacción y señal de «tienes algo que comprar»
     sign(() => t('sign.shop'), 3.6, 0.95, COUNTER.x, 3.9, HALL.minZ + 0.06, 0, { color: '#fff3c4', glow: '#ffb020', font: '700 130px Cinzel, serif', sub: () => t('sign.shopSub') });
     interactables.push({ id: 'counter', pos: new THREE.Vector3(COUNTER.x, 1.2, COUNTER.front + 0.2), radius: 3.3, prompt: { key: 'E', textKey: 'prompt.shop' } });
@@ -224,8 +295,10 @@ export function createWorld({ renderer, graphics }) {
     if (FEATURES.cardsChapter) interactables.push({ id: 'table:royal_roulette', game: 'roulette', pos: new THREE.Vector3(-5.6, 1.0, -2.9), radius: 2.6, prompt: { key: 'E', textKey: 'prompt.table', params: { name: 'ROYAL ROULETTE' } } });
     const shop = buildShopBeacon(ctx);
 
+    yield;
     // ---------------- puertas
     const doorObjects = buildDoors(ctx, sign);
+    yield;
 
     // ---------------- rótulo principal (neón con letras fundidas mientras el local está sucio)
     const neonOpts = { color: '#fff3c4', glow: '#d4af37', font: '700 118px Cinzel, serif' };
@@ -233,28 +306,38 @@ export function createWorld({ renderer, graphics }) {
     const neonBroken = sign('HOUSE OF ODDS', 6.2, 1.55, 0, 4.4, HALL.minZ + 0.075, 0, { ...neonOpts, dead: [1, 10] });
     const neonClean = neonBroken.neon ? null : sign('HOUSE OF ODDS', 6.2, 1.55, 0, 4.4, HALL.minZ + 0.07, 0, neonOpts);
 
+    yield;
     // ---------------- lámparas colgantes
     const pendants = buildPendants(ctx);
+    yield;
 
     // ---------------- ala norte (oculta hasta ampliar)
     const wing = buildWing(ctx, sign);
+    yield;
 
     // ---------------- objetos de la historia
     const story = buildStoryItems(ctx, sign);
+    yield;
 
     // ---------------- decoración comprable
     const carpet = buildCarpet(ctx);
+    yield;
     const decorSets = buildDecorSets(ctx, { addCollider: ctx.addCollider });
+    yield;
     const statue = buildStatue(ctx);
     const chandelier = buildChandelier(ctx);
+    yield;
 
     // ---------------- suciedad
     buildGrimeDecals(ctx);
+    yield;
     const clutter = buildClutter(ctx);
+    yield;
     // el cuadro caído también se retira con la limpieza
     clutter.push({ group: fallen, clearAt: 0.5, collider: null, scale: 1 });
     // desperfectos (goteras, grietas, humedad): los arregla Daniel
     const damage = buildDamage(ctx);
+    yield;
 
     // colisionadores de asientos (taburetes de mesas y máquinas)
     for (const a of anchors) {
@@ -262,8 +345,10 @@ export function createWorld({ renderer, graphics }) {
     }
 
     // ---------------- fusionar todo lo estático
+    yield;
     batch.build(root, { cast: g.shadows, receive: true });
     H.dispose();
+    yield;
 
     // ---------------- luces
     const lights = buildLights(ctx, { pendants, machine });
@@ -321,7 +406,11 @@ export function createWorld({ renderer, graphics }) {
       const A = ctx.B.at({ x: p.x, z: p.z, yaw: p.yaw });
       const zone = door.zone ? ZONES[door.zone] : null;
       const glow = zone ? kit.make({ color: 0x000000, emissive: zone.color, emissiveIntensity: 1.4 }) : null;
-      doorFrame(ctx, A, door.width, { glow });
+      // marco y hojas modelados (arquitrabe escalonado con remate, cuarterones con moldura, latón); si faltan, los de código
+      const tag = door.width > 3 ? '40' : '22';
+      const framed = hasModel(`door_frame_${tag}`) && batchModel(A, `door_frame_${tag}`, paletteRemap(ctx, { glow }), { skip: (o) => !glow && matKey(o.material) === 'glow' });
+      if (!framed) doorFrame(ctx, A, door.width, { glow });
+      const modeledLeaves = hasModel(`door_leaves_${tag}`);
       const along = door.wall === 'north' || door.wall === 'south';
       const leafW = door.width / 2 - 0.02;
       if (door.id === 'wing') {
@@ -330,11 +419,13 @@ export function createWorld({ renderer, graphics }) {
         grp.position.set(p.x, 0, p.z);
         grp.rotation.y = p.yaw;
         const b = new Batch();
-        for (const s of [-1, 1]) {
-          H.box(b, M.woodDark([1, 1]), leafW, DOOR_H - 0.04, 0.08, s * (leafW / 2 + 0.01), (DOOR_H - 0.04) / 2, 0.0, { r: 0.012 });
-          H.box(b, M.wood([1, 1]), leafW - 0.3, 1.0, 0.03, s * (leafW / 2 + 0.01), 0.8, 0.05, { r: 0.008 });
-          H.box(b, M.wood([1, 1]), leafW - 0.3, 1.2, 0.03, s * (leafW / 2 + 0.01), 2.1, 0.05, { r: 0.008 });
-          H.cyl(b, M.gold, 0.02, 0.02, 0.5, s * 0.14, 1.3, 0.09, { segments: 8 });
+        if (!(modeledLeaves && batchModel(b, `door_leaves_${tag}`, paletteRemap(ctx)))) {
+          for (const s of [-1, 1]) {
+            H.box(b, M.woodDark([1, 1]), leafW, DOOR_H - 0.04, 0.08, s * (leafW / 2 + 0.01), (DOOR_H - 0.04) / 2, 0.0, { r: 0.012 });
+            H.box(b, M.wood([1, 1]), leafW - 0.3, 1.0, 0.03, s * (leafW / 2 + 0.01), 0.8, 0.05, { r: 0.008 });
+            H.box(b, M.wood([1, 1]), leafW - 0.3, 1.2, 0.03, s * (leafW / 2 + 0.01), 2.1, 0.05, { r: 0.008 });
+            H.cyl(b, M.gold, 0.02, 0.02, 0.5, s * 0.14, 1.3, 0.09, { segments: 8 });
+          }
         }
         b.build(grp);
         root.add(grp);
@@ -345,7 +436,7 @@ export function createWorld({ renderer, graphics }) {
         continue;
       }
       // puertas de zona y entrada: dobles, cerradas
-      for (const s of [-1, 1]) {
+      if (!(modeledLeaves && batchModel(A, `door_leaves_${tag}`, paletteRemap(ctx)))) for (const s of [-1, 1]) {
         H.box(A, M.woodDark([1, 1]), leafW, DOOR_H - 0.04, 0.08, s * (leafW / 2 + 0.01), (DOOR_H - 0.04) / 2, -0.02, { r: 0.012 });
         H.box(A, M.wood([1, 1]), leafW - 0.26, 0.9, 0.03, s * (leafW / 2 + 0.01), 0.75, 0.035, { r: 0.008 });
         H.box(A, M.wood([1, 1]), leafW - 0.26, 1.2, 0.03, s * (leafW / 2 + 0.01), 2.05, 0.035, { r: 0.008 });
@@ -355,16 +446,25 @@ export function createWorld({ renderer, graphics }) {
       ctx.addCollider(p.x, p.z, gap.w, gap.d);
       if (zone) {
         const hex = `#${zone.color.toString(16).padStart(6, '0')}`;
-        const s = sign(() => t(`zone.${zone.id}`), 2.6, 0.65, 0, 3.55, 0.14, 0, { color: '#ffffff', glow: hex, font: '700 96px Cinzel, serif' }, root);
+        const s = sign(() => t(`zone.${zone.id}`), 2.6, 0.65, 0, 3.8, 0.03, 0, { color: '#ffffff', glow: hex, font: '700 96px Cinzel, serif' }, root);
         const holder = new THREE.Group();
         holder.position.set(p.x, 0, p.z);
         holder.rotation.y = p.yaw;
         root.add(holder);
         holder.add(s.mesh);
-        // candado luminoso
-        const lock = new THREE.Mesh(track(new THREE.CircleGeometry(0.11, 24)), kit.basic({ color: 0xff3048 }));
-        lock.position.set(0, 1.62, 0.07);
-        holder.add(lock);
+        // cadena entre los tiradores y candado de latón (sala cerrada): nada de botón rojo de videojuego
+        const steel = M.chrome;
+        const N = 15;
+        for (let k = 0; k <= N; k++) {
+          const u = k / N;
+          const x = -0.13 + 0.26 * u;
+          const y = 1.33 - 0.17 * (1 - (2 * u - 1) ** 2);
+          const slope = -0.17 * -2 * (2 * u - 1) * 2 / 0.26;
+          H.torus(A, steel, 0.0105, 0.0028, x, y, 0.105, { rx: k % 2 ? Math.PI / 2 : 0, rz: Math.atan(slope), segments: 10 });
+        }
+        H.torus(A, steel, 0.02, 0.0045, 0, 1.13, 0.112, { rx: 0, arc: Math.PI, segments: 12 });
+        H.box(A, M.brass, 0.062, 0.07, 0.026, 0, 1.09, 0.112, { r: 0.008 });
+        H.box(A, M.black, 0.008, 0.02, 0.004, 0, 1.085, 0.126, { r: 0 });
         interactables.push({ id: `door:${door.zone}`, zone: door.zone, pos: new THREE.Vector3(p.x + p.inward.x * 0.8, 1.2, p.z + p.inward.z * 0.8), radius: 2.4, prompt: { key: 'E', textKey: 'prompt.door', params: { zone: t(`zone.${door.zone}`) } } });
       } else if (door.id === 'entrance') {
         // cartel colgado de «CERRADO»
@@ -372,7 +472,7 @@ export function createWorld({ renderer, graphics }) {
         holder.position.set(p.x, 0, p.z);
         holder.rotation.y = p.yaw;
         root.add(holder);
-        const s = sign(() => t('sign.closed'), 1.5, 0.38, 0, 1.75, 0.09, 0, { color: '#ffdede', glow: '#c42240', font: '700 120px Cinzel, serif' }, holder);
+        const s = sign(() => t('sign.closed'), 1.5, 0.38, 0, 1.75, 0.045, 0, { color: '#ffdede', glow: '#c42240', font: '700 120px Cinzel, serif' }, holder);
         s.closedSign = true;
         const mat = ctx.B.at({ x: p.x, z: p.z + p.inward.z * 1.0, yaw: p.yaw });
         H.box(mat, kit.make({ color: 0x241612, rough: 1, dirt: 'hall' }), 2.4, 0.015, 1.2, 0, 0.008, 0, { r: 0 });
@@ -391,11 +491,20 @@ export function createWorld({ renderer, graphics }) {
     const zs = [-8.8, 0, 8.8];
     const list = [];
     let i = 0;
+    const modeled = hasModel('pendant');
     for (const z of zs) {
       for (const x of xs) {
-        const A = ctx.B.at({ x, z });
         const top = HALL.height;
         const drop = 1.35;
+        if (modeled) {
+          // lámpara modelada: florón escalonado, varilla con nudos, galería y globo opalino con bandas doradas
+          const kind = i === 6 ? 'flicker' : i === 9 ? 'dead' : 'alive';
+          batchModel(ctx.B.at({ x, y: top, z }), 'pendant', paletteRemap(ctx, { opal: kind === 'flicker' ? flicker : kind === 'dead' ? dead : opal }));
+          list.push({ x, y: top - drop - 0.2, z, kind });
+          i++;
+          continue;
+        }
+        const A = ctx.B.at({ x, z });
         H.cyl(A, M.brass, 0.09, 0.07, 0.05, 0, top - 0.03, 0, { segments: 16 });
         H.cyl(A, M.brass, 0.008, 0.008, drop, 0, top - drop / 2, 0, { segments: 6 });
         H.lathe(A, M.brass, [[0.02, 0.1], [0.07, 0.08], [0.1, 0.03], [0.1, 0.0], [0.03, 0.0]], 0, top - drop - 0.06, 0, { segments: 20 });
@@ -465,11 +574,11 @@ export function createWorld({ renderer, graphics }) {
       return g;
     };
     const sofaAt = (x, z, yaw) => real('sofa', { x, z, yaw }) || sofa(ctx, b.at({ x, z, yaw }));
-    for (const x of [-3.9, -2.1, 2.1, 3.9]) sofaAt(x, zSofa, 0);
-    sofaAt(-7.4, cz - 0.8, Math.PI / 2);
-    sofaAt(-7.4, cz + 0.8, Math.PI / 2);
-    sofaAt(7.4, cz - 0.8, -Math.PI / 2);
-    sofaAt(7.4, cz + 0.8, -Math.PI / 2);
+    for (const x of [-4.15, -2.1, 2.1, 4.15]) sofaAt(x, zSofa, 0);
+    sofaAt(-7.4, cz - 1.05, Math.PI / 2);
+    sofaAt(-7.4, cz + 1.05, Math.PI / 2);
+    sofaAt(7.4, cz - 1.05, -Math.PI / 2);
+    sofaAt(7.4, cz + 1.05, -Math.PI / 2);
     if (!real('coffee_table', { x: 0, z: cz })) coffeeTable(ctx, b.at({ x: 0, z: cz }));
     for (const x of [-5.6, 5.6]) {
       if (real('console', { x, z: NORTH_WING.minZ + 0.32 })) real('brass_vase', { x, y: 0.95, z: NORTH_WING.minZ + 0.32, scale: 0.9 });
@@ -481,16 +590,16 @@ export function createWorld({ renderer, graphics }) {
     ctx.addCollider(NORTH_WING.minX - 0.2, cz, 0.4, d);
     ctx.addCollider(NORTH_WING.maxX + 0.2, cz, 0.4, d);
     ctx.addCollider(0, NORTH_WING.minZ - 0.2, w + 0.8, 0.4);
-    ctx.addCollider(-3, zSofa, 3.4, 0.8);
-    ctx.addCollider(3, zSofa, 3.4, 0.8);
-    ctx.addCollider(-7.4, cz, 0.8, 3.2);
-    ctx.addCollider(7.4, cz, 0.8, 3.2);
+    ctx.addCollider(-3.12, zSofa, 4.1, 1.0);
+    ctx.addCollider(3.12, zSofa, 4.1, 1.0);
+    ctx.addCollider(-7.4, cz, 1.0, 4.2);
+    ctx.addCollider(7.4, cz, 1.0, 4.2);
     ctx.addCollider(0, cz, 1.3, 1.3);
     // dos plazas por sofá
     const seats = [];
-    for (const x of [-3.9, -2.1, 2.1, 3.9]) for (const dx of [-0.39, 0.39]) seats.push([x + dx, zSofa + 0.05, 0]);
-    for (const [sx, yaw] of [[-1, Math.PI / 2], [1, -Math.PI / 2]]) for (const z of [cz - 0.8, cz + 0.8]) for (const dz of [-0.39, 0.39]) seats.push([sx * 7.35, z + dz, yaw]);
-    for (const [x, z, yaw] of seats) anchors.push({ type: 'sofa', x, z, yaw, sitY: 0.44, area: 'wing' });
+    for (const x of [-4.15, -2.1, 2.1, 4.15]) for (const dx of [-0.49, 0.49]) seats.push([x + dx, zSofa + 0.07, 0]);
+    for (const [sx, yaw] of [[-1, Math.PI / 2], [1, -Math.PI / 2]]) for (const z of [cz - 1.05, cz + 1.05]) for (const dz of [-0.49, 0.49]) seats.push([sx * 7.33, z + dz, yaw]);
+    for (const [x, z, yaw] of seats) anchors.push({ type: 'sofa', x, z, yaw, sitY: 0.53, area: 'wing' });
     const art = painting(ctx, { x: 0, y: 2.6, z: NORTH_WING.minZ + 0.06, yaw: 0, seed: 'wing-a', w: 2.0, h: 2.6 });
     grp.add(art);
     const s = sign(() => t('sign.wing'), 3.8, 0.95, 0, 4.4, NORTH_WING.minZ + 0.08, 0, { color: '#ffe9a8', glow: '#d4af37', font: '700 92px Cinzel, serif', sub: () => t('sign.wingSub') }, grp);
@@ -631,16 +740,46 @@ export function createWorld({ renderer, graphics }) {
   let probe = null;
   let probeSig = '';
   let probeDirty = 0;
+  let pmrem = null;
+  /** Captura en curso por caras (una cara por fotograma: sin tirón al limpiar o al dar la luz). */
+  let capture = null;
+  const probeSize = () => (state.g.textureSize >= 1024 ? 256 : 128);
   /**
-   * Captura el casino en un cubemap desde el centro de la sala y lo convierte (PMREM) en el entorno de
-   * la escena: reflejos coherentes y luz indirecta. Se repite al cambiar la iluminación o la limpieza.
+   * La sonda (reflejos y luz indirecta del propio casino) es de MEDIA hacia arriba. En BAJA y MUY BAJA se usa
+   * el entorno base: capturarla obliga a compilar todos los shaders una segunda vez (texturas lineales) y en un
+   * PC modesto eso eran varios segundos más de carga.
    */
-  function captureProbe() {
-    if (!B) return;
-    const size = state.g.textureSize >= 1024 ? 256 : 128;
-    const cubeRT = new THREE.WebGLCubeRenderTarget(size, { type: THREE.HalfFloatType });
-    const cam = new THREE.CubeCamera(0.1, 80, cubeRT);
-    cam.position.set(0, 2.3, 2.0);
+  const probeWanted = () => state.g.textureSize >= 512;
+
+  function startCapture() {
+    if (!B) return null;
+    const size = probeSize();
+    if (capture && capture.size !== size) {
+      capture.rt.dispose();
+      capture = null;
+    }
+    if (!capture) {
+      const rt = new THREE.WebGLCubeRenderTarget(size, { type: THREE.HalfFloatType });
+      rt.texture.generateMipmaps = false;
+      const cam = new THREE.CubeCamera(0.1, 80, rt);
+      cam.position.set(0, 2.3, 2.0);
+      cam.updateMatrixWorld();
+      capture = { rt, cam, size, face: 0 };
+    }
+    capture.face = 0;
+    return capture;
+  }
+
+  /**
+   * Dibuja la siguiente cara del cubo. Mismas variantes de shader que el juego (niebla y entorno siguen
+   * puestos, solo sin densidad / con el entorno base): capturar no obliga a compilar nada nuevo.
+   */
+  function captureFace() {
+    const c = capture;
+    if (c.cam.coordinateSystem !== renderer.coordinateSystem) {
+      c.cam.coordinateSystem = renderer.coordinateSystem;
+      c.cam.updateCoordinateSystem();
+    }
     const hidden = [];
     scene.traverse((o) => {
       if ((o.isPoints || o.userData.noProbe) && o.visible) {
@@ -649,21 +788,62 @@ export function createWorld({ renderer, graphics }) {
       }
     });
     const prevEnv = scene.environment;
-    scene.environment = null;
-    const prevFog = scene.fog;
-    scene.fog = null;
-    cam.update(renderer, scene);
-    scene.fog = prevFog;
+    scene.environment = envTarget.texture;
+    const prevDensity = scene.fog.density;
+    scene.fog.density = 0;
+    const prevRT = renderer.getRenderTarget();
+    // la sombra se dibuja solo en la primera cara (no cambia entre caras)
+    const prevNeeds = renderer.shadowMap.needsUpdate;
+    renderer.shadowMap.needsUpdate = c.face === 0;
+    renderer.setRenderTarget(c.rt, c.face);
+    renderer.render(scene, c.cam.children[c.face]);
+    renderer.setRenderTarget(prevRT);
+    renderer.shadowMap.needsUpdate = prevNeeds;
+    scene.fog.density = prevDensity;
+    scene.environment = prevEnv;
     for (const o of hidden) o.visible = true;
-    const pmrem = new THREE.PMREMGenerator(renderer);
-    const next = pmrem.fromCubemap(cubeRT.texture);
-    pmrem.dispose();
-    cubeRT.dispose();
-    probe?.dispose();
-    probe = next;
+    c.face++;
+    return c.face >= 6;
+  }
+
+  /** Convierte el cubo capturado (PMREM) en el entorno de la escena. */
+  function finishCapture() {
+    pmrem ??= new THREE.PMREMGenerator(renderer);
+    const next = pmrem.fromCubemap(capture.rt.texture, probe ?? undefined);
+    if (next !== probe) {
+      probe?.dispose();
+      probe = next;
+    }
     scene.environment = probe.texture;
-    void prevEnv;
+    capture.face = 0;
     calibrateExposure();
+  }
+
+  /**
+   * Captura el casino en un cubemap desde el centro de la sala y lo convierte (PMREM) en el entorno de
+   * la escena: reflejos coherentes y luz indirecta. Se repite al cambiar la iluminación o la limpieza.
+   * Esta versión es de golpe (reconstrucción); en juego se hace por caras con `stepProbe`.
+   */
+  function captureProbe() {
+    if (!probeWanted()) return;
+    if (!startCapture()) return;
+    while (!captureFace());
+    finishCapture();
+  }
+
+  /** Avanza una cara de la captura pendiente (llamado desde update). */
+  function stepProbe() {
+    if (!B) return;
+    if (!probeWanted()) {
+      scene.environment = envTarget.texture;
+      return true;
+    }
+    if (!capture || capture.face === 0) startCapture();
+    if (captureFace()) {
+      finishCapture();
+      return true;
+    }
+    return false;
   }
 
   // ======================================================================== exposición
@@ -734,12 +914,12 @@ export function createWorld({ renderer, graphics }) {
     B.pendants.flicker.userData.eBase = 1.25 * glow;
     // luces que solo existen tras una compra: apagadas no cuestan nada (no entran en los shaders)
     if (B.lights.wingLight) {
+      // siempre «visible» (a 0 cuando no está): encender/apagar una luz cambia los shaders de TODO el casino
+      // y obligaba a recompilarlos en mitad de la partida (tirón al comprar)
       B.lights.wingLight.light.intensity = state.expanded ? 70 * k : 0;
-      B.lights.wingLight.light.visible = !!state.expanded;
     }
     if (B.lights.chandLight) {
       B.lights.chandLight.light.intensity = state.loadout?.chandelier ? 70 : 0;
-      B.lights.chandLight.light.visible = !!state.loadout?.chandelier;
     }
     scene.fog.density = 0.014 + d * 0.012;
   }
@@ -908,7 +1088,6 @@ export function createWorld({ renderer, graphics }) {
     const S = B.story;
     S.setItem('toolbox', st.items.toolbox !== false);
     S.setItem('doc_box', st.items.doc_box !== false);
-    S.lever.rotation.x = st.breaker ? -2.4 : 0;
     // desperfectos: se ven hasta que Daniel repara (la app puede retenerlos durante su secuencia)
     B.damage.setRepaired(st.repaired && !state.damageHold);
     S.breakerLight.material.color.set(st.breaker ? 0x40ff70 : 0xff3040);
@@ -916,6 +1095,7 @@ export function createWorld({ renderer, graphics }) {
     for (const s of B.signs) if (s.closedSign) s.mesh.visible = !st.entranceOpen;
     S.street.material.opacity = st.entranceOpen ? 0.22 : 0;
     S.kitBoxes.visible = !st.receptionStyle && st.items.reception_kit !== false && st.receptionKit;
+    if (S.kitCollider) S.kitCollider.enabled = S.kitBoxes.visible;
     for (const [name, g] of Object.entries(S.styles)) g.visible = st.receptionStyle === name;
     // interactuables: los de historia se añaden a la lista estable solo mientras hagan falta
     for (const [id, it] of storyInteracts) {
@@ -957,9 +1137,9 @@ export function createWorld({ renderer, graphics }) {
     probe?.dispose();
     probe = null;
     applyLighting();
-    captureProbe();
-    scene.environment = probe?.texture ?? envTarget.texture;
-    probeDirty = 0;
+    // la sonda se recaptura por caras (o en el calentamiento si la app lo pide): sin congelar
+    scene.environment = envTarget.texture;
+    probeDirty = -1;
     world.onRebuild?.();
   }
 
@@ -978,9 +1158,9 @@ export function createWorld({ renderer, graphics }) {
 
   function applyEnvironment(g) {
     void g;
-    if (!probe) captureProbe();
     scene.environment = probe?.texture ?? envTarget.texture;
     applyLighting();
+    if (!probe) probeDirty = -1; // se captura por caras en los próximos fotogramas (sin congelar)
   }
 
   const world = {
@@ -1050,6 +1230,11 @@ export function createWorld({ renderer, graphics }) {
     pressResetButton() {
       B.machine.pressReset?.();
     },
+    /** Cuadro eléctrico: se abre la puerta, «clac» del general por dentro y se cierra (secuencia de la luz). */
+    operateBreaker(duration = 2.6) {
+      state.panelT = 0;
+      state.panelDur = duration;
+    },
     /** Limpieza animada hasta `clean` (0–1) aunque no venga de una compra (misiones). */
     animateClean(clean) {
       state.dirtTarget = 1 - Math.max(0, Math.min(1, clean));
@@ -1063,7 +1248,8 @@ export function createWorld({ renderer, graphics }) {
 
     update(dt, time, { paused = false } = {}) {
       // la sonda no se captura en mitad de un parpadeo de encendido (se quedaría con la luz a medias)
-      if (probeDirty > 0 && !(state.flickerT > 0) && (probeDirty -= dt) <= 0) captureProbe();
+      if (probeDirty > 0 && !(state.flickerT > 0) && (probeDirty -= dt) <= 0) probeDirty = -1; // pendiente: por caras
+      if (probeDirty < 0 && stepProbe()) probeDirty = 0;
       if (!paused) for (const w of B.wheels) w.update(dt);
       if (state.pendingRebuild && !B.machine.busy) {
         state.pendingRebuild = false;
@@ -1136,6 +1322,20 @@ export function createWorld({ renderer, graphics }) {
       }
       for (const u of B.ctx.dynamic) u.update(dt, time, d);
       B.damage.update(dt, time);
+      if (!paused) B.damage.reflect(camera);
+      // puerta del cuadro eléctrico: abre (0,6 s), espera y cierra
+      if (state.panelT !== undefined && state.panelT !== null) {
+        state.panelT += dt;
+        const T = state.panelT;
+        const D = state.panelDur ?? 2.6;
+        const ease = (x) => x * x * (3 - 2 * x);
+        const k = T < 0.6 ? ease(T / 0.6) : T < D - 0.6 ? 1 : ease(Math.max(0, (D - T) / 0.6));
+        B.story.setPanel?.(k);
+        if (T >= D) {
+          B.story.setPanel?.(0);
+          state.panelT = null;
+        }
+      }
       updateReveal(dt);
 
       // polvo (más visible cuanto más sucio)
@@ -1212,11 +1412,125 @@ export function createWorld({ renderer, graphics }) {
     dispose() {
       B?.dispose();
       envTarget.dispose();
+      waterRefl?.dispose();
     },
   };
 
-  B = build(graphics);
-  applyEnvironment(graphics);
-  applyShadows(graphics);
+  /** Construcción por pasos (pantalla de carga). */
+  world.load = async (onProgress) => {
+    B = await buildAsync(graphics, onProgress);
+    applyShadows(graphics);
+    scene.environment = envTarget.texture;
+    applyLighting();
+  };
+  /** Construcción de golpe (pruebas y herramientas). */
+  world.loadSync = () => {
+    B = build(graphics);
+    applyEnvironment(graphics);
+    applyShadows(graphics);
+  };
+
+  /**
+   * Calentamiento antes de enseñar nada: compila los shaders (en paralelo si la GPU lo permite, si no por
+   * trozos), sube las texturas a la GPU por tandas y captura la sonda de entorno cara a cara. Todo cediendo
+   * el hilo: la barra avanza y el primer fotograma del menú ya no se congela.
+   */
+  world.warmup = async (onProgress = () => {}) => {
+    const t0 = performance.now();
+    let tick = performance.now();
+    const maybeBreathe = async () => {
+      if (performance.now() - tick > 24) {
+        await breathe();
+        tick = performance.now();
+      }
+    };
+    // 1) shaders de TODO (también lo oculto: ala, compras, personajes que aún no han llegado). Dos variantes:
+    //    la de pantalla y la de la sonda de entorno (se dibuja a una textura lineal). El enlazado se fuerza
+    //    programa a programa cediendo el hilo entre medias: nada de un único bloqueo de varios segundos.
+    try {
+      pmrem ??= new THREE.PMREMGenerator(renderer);
+      pmrem.compileCubemapShader();
+      const extra = world.warmExtras?.() ?? [];
+      const parallel = renderer.extensions.has('KHR_parallel_shader_compile') && !!renderer.compileAsync;
+      const useProbe = probeWanted();
+      const cube = useProbe ? startCapture().rt : null;
+      const linked = new Set(renderer.info.programs ?? []);
+      const passes = [null, ...(cube ? [cube] : [])];
+      for (let pi = 0; pi < passes.length; pi++) {
+        const rt = passes[pi];
+        const jobs = [];
+        for (const obj of [scene, ...extra]) {
+          renderer.setRenderTarget(rt, 0);
+          if (parallel) jobs.push(renderer.compileAsync(obj, camera, scene));
+          else renderer.compile(obj, camera, scene);
+          renderer.setRenderTarget(null);
+        }
+        if (parallel) {
+          await Promise.race([Promise.all(jobs), new Promise((r) => setTimeout(r, 15000))]);
+        } else {
+          const fresh = (renderer.info.programs ?? []).filter((p) => !linked.has(p));
+          for (let i = 0; i < fresh.length; i++) {
+            linked.add(fresh[i]);
+            fresh[i].getUniforms();
+            onProgress(0.5 * ((pi + i / fresh.length) / passes.length));
+            await maybeBreathe();
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[world] precompilación de shaders:', err);
+    }
+    console.info(`[world] shaders ${Math.round(performance.now() - t0)} ms · ${renderer.info.programs?.length} programas`);
+    globalThis.__warmProgs = new Set(renderer.info.programs);
+    onProgress(0.5);
+    // 2) texturas a la GPU por tandas (antes se subían todas en el primer fotograma del menú)
+    const textures = new Set();
+    scene.traverse((o) => {
+      for (const m of [].concat(o.material ?? [])) {
+        for (const v of Object.values(m)) if (v?.isTexture && !v.isRenderTargetTexture) textures.add(v);
+        for (const u of Object.values(m.uniforms ?? {})) if (u?.value?.isTexture) textures.add(u.value);
+      }
+    });
+    let k = 0;
+    for (const tex of textures) {
+      try {
+        renderer.initTexture(tex);
+      } catch {
+        /* textura aún sin imagen: se sube al usarla */
+      }
+      onProgress(0.5 + 0.3 * (++k / textures.size));
+      await maybeBreathe();
+    }
+    console.info(`[world] texturas ${Math.round(performance.now() - t0)} ms`);
+    // 3) sonda de entorno, una cara cada vez
+    if (probeWanted()) {
+      startCapture();
+      while (!captureFace()) {
+        onProgress(0.8 + 0.18 * (capture.face / 6));
+        await breathe();
+      }
+      finishCapture();
+    } else scene.environment = envTarget.texture;
+    probeDirty = 0;
+    onProgress(1);
+    console.info(`[world] calentamiento ${Math.round(performance.now() - t0)} ms · ${textures.size} texturas`);
+  };
+  /** Compila en segundo plano (por trozos) los shaders de objetos que aún no están en escena (clientes). */
+  world.warmObjects = async (objects) => {
+    try {
+      const linked = new Set(renderer.info.programs ?? []);
+      for (const obj of objects) {
+        renderer.compile(obj, camera, scene);
+        for (const prog of (renderer.info.programs ?? []).filter((x) => !linked.has(x))) {
+          linked.add(prog);
+          prog.getUniforms();
+          await breathe();
+        }
+        await breathe();
+      }
+    } catch (err) {
+      console.warn('[world] compilación en segundo plano:', err);
+    }
+  };
   return world;
 }

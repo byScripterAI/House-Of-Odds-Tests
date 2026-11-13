@@ -3,6 +3,8 @@ import { Batch } from '../../gfx/geometry.js';
 import { bareWallDecal, ceilingStainDecal, crackDecal, waterStainDecal } from '../../gfx/textures.js';
 import { HALL } from '../layout.js';
 import { placeProp } from './assets.js';
+import { leakDrops, puddleMaterial } from './water.js';
+import { batchModel, hasModel, paletteRemap } from './models.js';
 
 /**
  * DESPERFECTOS del edificio (lo que arregla Daniel antes de abrir al público):
@@ -87,89 +89,85 @@ export function buildDamage(ctx) {
   wallStain(-4, 3.1, HALL.maxZ - 0.014, Math.PI, 1.5, 2.0, 0);
   wallStain(-12.4, 3.4, HALL.minZ + 0.014, 0, 1.3, 1.8, 1);
 
-  // ---------------------------------------------------------------- goteras
-  const water = kit.make({ color: 0xa8c8dc, rough: 0.05, metal: 0, transparent: true, opacity: 0.85, envIntensity: 1.5 });
-  // agua: oscurece el suelo y refleja (dieléctrico: brillo solo de reflejo, como el agua de verdad)
-  const puddleMat = kit.make({ color: 0x030303, rough: 0.06, metal: 0, transparent: true, opacity: 0.5, depthWrite: false, envIntensity: 1 });
-  puddleMat.polygonOffset = true;
-  puddleMat.polygonOffsetFactor = -4;
-  puddleMat.polygonOffsetUnits = -4;
-  const rippleMat = kit.basic({ color: 0xd8ecf6, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false });
-  const dropGeo = track(new THREE.SphereGeometry(0.022, 8, 6));
-  const splashGeo = track(new THREE.SphereGeometry(0.01, 5, 4));
-  const ringGeo = track(new THREE.RingGeometry(0.05, 0.065, 28));
+  // ---------------------------------------------------------------- goteras (agua: ver water.js)
   const yellow = kit.make({ color: 0xd8b21c, rough: 0.45 });
   const tin = kit.make({ color: 0x8c9196, metal: 0.85, rough: 0.38, envIntensity: 1 });
+  const puddles = [];
+  const blockers = []; // cubo, caballete y escalera: no se atraviesan (se retiran con la reparación)
+  const reflection = ctx.waterReflection ?? null;
+  const dropletCount = Math.round(4 + 10 * Math.min(1.5, ctx.g.particleScale ?? 1));
   const leaks = LEAKS.map((L, li) => {
     const g = new THREE.Group();
     g.position.set(L.x, 0, L.z);
     group.add(g);
-    // charco de contorno irregular
-    const shape = new THREE.Shape();
-    const n = 26;
-    for (let i = 0; i <= n; i++) {
-      const a = (i / n) * Math.PI * 2;
-      const k = L.puddle * (0.78 + 0.22 * Math.sin(a * 3 + li) + (r() - 0.5) * 0.12);
-      const px = Math.cos(a) * k * 1.15;
-      const pz = Math.sin(a) * k * 0.8;
-      if (i === 0) shape.moveTo(px, pz);
-      else shape.lineTo(px, pz);
-    }
-    const puddle = new THREE.Mesh(track(new THREE.ShapeGeometry(shape)), puddleMat);
+    // charco: contorno irregular, borde húmedo y ondas en el shader (un plano de sobra alrededor)
+    const pw = L.puddle * 1.15;
+    const pd = L.puddle * 0.8;
+    const pm = puddleMaterial({ size: [pw, pd], seed: li * 7.3 + 1.1, reflection });
+    track(pm.material);
+    const puddle = new THREE.Mesh(track(new THREE.PlaneGeometry(pw * 2.7, pd * 2.7)), pm.material);
     puddle.rotation.x = -Math.PI / 2;
     puddle.position.y = 0.009;
     puddle.receiveShadow = true;
+    puddle.renderOrder = 3;
+    puddle.userData.noReflect = true;
     g.add(puddle);
+    puddles.push({ mesh: puddle, pm, radius: Math.max(pw, pd) * 1.4 });
     // cubo recogiendo el agua
     let landY = 0.012;
+    let target = pm;
     if (L.bucket) {
       const b = new Batch();
-      H.cyl(b, tin, 0.2, 0.16, 0.3, 0, 0.15, 0, { segments: 20, open: true });
-      H.cyl(b, tin, 0.16, 0.16, 0.01, 0, 0.005, 0, { segments: 20 });
-      H.torus(b, tin, 0.2, 0.008, 0, 0.3, 0, { segments: 24 });
-      H.torus(b, tin, 0.19, 0.005, 0, 0.3, 0, { rx: 0, ry: 0.3, arc: Math.PI, segments: 16 });
+      // cubo de zinc modelado (aros, asa con agarradera); si falta, el de código
+      if (!(hasModel('bucket') && batchModel(b, 'bucket', paletteRemap(ctx, { tin })))) {
+        H.cyl(b, tin, 0.2, 0.16, 0.3, 0, 0.15, 0, { segments: 20, open: true });
+        H.cyl(b, tin, 0.16, 0.16, 0.01, 0, 0.005, 0, { segments: 20 });
+        H.torus(b, tin, 0.2, 0.008, 0, 0.3, 0, { segments: 24 });
+        H.torus(b, tin, 0.19, 0.005, 0, 0.3, 0, { rx: 0, ry: 0.3, arc: Math.PI, segments: 16 });
+      }
       b.build(g, { cast: true });
-      const inner = new THREE.Mesh(track(new THREE.CircleGeometry(0.185, 20)), puddleMat);
+      const im = puddleMaterial({ size: [0.185 / 0.83, 0.185 / 0.83], round: true, reflection: null });
+      track(im.material);
+      const inner = new THREE.Mesh(track(new THREE.CircleGeometry(0.186, 28)), im.material);
       inner.rotation.x = -Math.PI / 2;
       inner.position.y = 0.22;
+      inner.renderOrder = 3;
+      inner.userData.noReflect = true;
       g.add(inner);
+      puddles.push({ mesh: inner, pm: im, radius: 0.3, noRefl: true });
       landY = 0.222;
+      target = im;
+      blockers.push(ctx.addCollider(L.x, L.z, 0.5, 0.5, true));
     }
     // cartel de «suelo mojado» (caballete amarillo)
     if (L.sign) {
       const b = new Batch();
+      const modeledSign = hasModel('wetsign') && batchModel(b, 'wetsign', paletteRemap(ctx));
       // caballete en A: los dos paneles se juntan arriba, con asa y franja negra
-      for (const s of [-1, 1]) H.box(b, yellow, 0.32, 0.62, 0.018, 0, 0.3, s * 0.1, { r: 0.006, rx: -s * 0.3 });
-      H.box(b, yellow, 0.12, 0.04, 0.04, 0, 0.6, 0, { r: 0.01 });
-      for (const s of [-1, 1]) H.box(b, M.black, 0.24, 0.05, 0.004, 0, 0.415, s * 0.0755, { r: 0.002, rx: -s * 0.3 });
-      for (const s of [-1, 1]) H.box(b, M.black, 0.1, 0.1, 0.004, 0, 0.262, s * 0.1228, { r: 0.002, rx: -s * 0.3, rz: Math.PI / 4 });
+      if (!modeledSign) for (const s of [-1, 1]) H.box(b, yellow, 0.32, 0.62, 0.018, 0, 0.3, s * 0.1, { r: 0.006, rx: -s * 0.3 });
+      if (!modeledSign) {
+        H.box(b, yellow, 0.12, 0.04, 0.04, 0, 0.6, 0, { r: 0.01 });
+        for (const s of [-1, 1]) H.box(b, M.black, 0.24, 0.05, 0.004, 0, 0.415, s * 0.0755, { r: 0.002, rx: -s * 0.3 });
+        for (const s of [-1, 1]) H.box(b, M.black, 0.1, 0.1, 0.004, 0, 0.262, s * 0.1228, { r: 0.002, rx: -s * 0.3, rz: Math.PI / 4 });
+      }
       const sg = new THREE.Group();
       sg.position.set(1.3, 0, 0.35);
       sg.rotation.y = 0.5;
       b.build(sg, { cast: true });
       g.add(sg);
+      blockers.push(ctx.addCollider(L.x + 1.3, L.z + 0.35, 0.5, 0.5, true));
     }
-    const drops = [0, 1].map(() => {
-      const d = new THREE.Mesh(dropGeo, water);
-      d.scale.set(1, 1.7, 1);
-      g.add(d);
-      return d;
+    const offset = r() * 3;
+    const drops = leakDrops(ctx, {
+      top: HALL.height - 0.02,
+      landY,
+      period: L.period,
+      offset,
+      droplets: dropletCount,
+      onImpact: (time) => target.hit((r() - 0.5) * 0.02, (r() - 0.5) * 0.02, time, 0.85 + r() * 0.3),
     });
-    const ripples = [0, 1].map(() => {
-      const m = new THREE.Mesh(ringGeo, rippleMat.clone());
-      track(m.material);
-      m.rotation.x = -Math.PI / 2;
-      m.position.y = landY + 0.004;
-      g.add(m);
-      return m;
-    });
-    const splash = [0, 1, 2, 3, 4].map((i) => {
-      const m = new THREE.Mesh(splashGeo, water);
-      m.userData.a = (i / 5) * Math.PI * 2 + r();
-      g.add(m);
-      return m;
-    });
-    return { L, g, drops, ripples, splash, landY, offset: r() * 3 };
+    g.add(drops.group);
+    return { L, g, drops, landY, offset };
   });
 
   // ---------------------------------------------------------------- papel pintado despegado
@@ -182,7 +180,7 @@ export function buildDamage(ctx) {
     decals.push(m);
     return m;
   });
-  const peelMat = ctx.M.wall([0.6, 0.6]);
+  const peelMat = ctx.M.wall({ fresh: true });
   peelMat.side = THREE.DoubleSide;
   const peel = [
     [HALL.minX + 0.04, -6.5, Math.PI / 2], [HALL.maxX - 0.04, -6.4, -Math.PI / 2],
@@ -251,45 +249,38 @@ export function buildDamage(ctx) {
       pivot.rotation.z = -0.25; // la parte de arriba descansa en la pared
       pivot.add(ladder);
       group.add(pivot);
+      blockers.push(ctx.addCollider(13.45, 6.95, 0.75, 0.7, true));
     }
   }
 
   // ---------------------------------------------------------------- animación de las goteras
-  const G = 9.81;
-  const fall = Math.sqrt((2 * (HALL.height - 0.1)) / G);
+  const _c = new THREE.Vector3();
+  const _f = new THREE.Frustum();
+  const _pm = new THREE.Matrix4();
+  const _sph = new THREE.Sphere();
+  let reflOn = false;
   function update(dt, time) {
     if (!group.visible) return;
-    for (const lk of leaks) {
-      const P = lk.L.period;
-      lk.drops.forEach((d, i) => {
-        const t = (time + lk.offset + i * P * 0.5) % P;
-        if (t < fall) {
-          d.visible = true;
-          const y = HALL.height - 0.08 - 0.5 * G * t * t;
-          d.position.set(0, Math.max(lk.landY, y), 0);
-          d.scale.set(1, 1.4 + Math.min(1.6, t * 2.2), 1);
-        } else d.visible = false;
-        // ondas y salpicadura tras el impacto
-        const after = t - fall;
-        const rp = lk.ripples[i];
-        if (after >= 0 && after < 0.9) {
-          const k = after / 0.9;
-          rp.scale.setScalar(1 + k * (lk.L.bucket ? 2.4 : 6));
-          rp.material.opacity = (1 - k) * 0.5;
-        } else rp.material.opacity = 0;
-        if (i === 0) {
-          for (const s of lk.splash) {
-            if (after >= 0 && after < 0.28) {
-              const k = after / 0.28;
-              const a = s.userData.a;
-              s.visible = true;
-              s.position.set(Math.cos(a) * k * 0.09, lk.landY + Math.sin(k * Math.PI) * 0.07, Math.sin(a) * k * 0.09);
-            } else s.visible = false;
-          }
-        }
-      });
-    }
+    for (const lk of leaks) lk.drops.update(dt, time);
+    for (const p of puddles) p.pm.update(time, reflOn && !p.noRefl);
     for (const f of dynamic) f(dt, time);
+  }
+
+  /** Reflejo plano (ALTA/ULTRA): solo si se ve algún charco cerca. Se llama con la cámara ya colocada. */
+  function reflect(camera) {
+    reflOn = false;
+    if (!reflection || !group.visible) return;
+    camera.updateMatrixWorld();
+    _f.setFromProjectionMatrix(_pm.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+    const cam = _c.setFromMatrixPosition(camera.matrixWorld);
+    const seen = puddles.some((p) => {
+      if (p.noRefl) return false;
+      p.mesh.getWorldPosition(_sph.center);
+      _sph.radius = p.radius;
+      return _sph.center.distanceTo(cam) < 14 && _f.intersectsSphere(_sph);
+    });
+    if (!seen) return;
+    reflOn = reflection.render(camera, puddles.map((p) => p.mesh));
   }
 
   return {
@@ -299,7 +290,9 @@ export function buildDamage(ctx) {
     setRepaired(on) {
       group.visible = !on;
       for (const m of decals) m.opacity = on ? 0 : m.userData.baseOpacity;
+      for (const c of blockers) c.enabled = !on;
     },
     update,
+    reflect,
   };
 }

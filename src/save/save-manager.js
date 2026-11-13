@@ -65,6 +65,7 @@ export function sanitizeSettings(raw, defaults = DEFAULT_SETTINGS) {
       screenFx: bool(g.screenFx, defaults.graphics.screenFx),
       auto: bool(g.auto, defaults.graphics.auto),
       detected: QUALITY_ORDER.includes(g.detected) ? g.detected : '',
+      detectVersion: Number.isInteger(g.detectVersion) ? g.detectVersion : 0,
     },
     audio: {
       master: clamp(a.master, 0, 1, defaults.audio.master),

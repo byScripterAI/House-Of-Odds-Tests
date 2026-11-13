@@ -56,6 +56,7 @@ export default {
   "ui.beta.p3": "If you find one, write down what you were doing and what happened, and send it to the game’s developer. Every report helps!",
   "ui.beta.version": "Version {v}",
   "ui.beta.go": "Got it, let’s play",
+  "boot.tipLabel": "Tip",
   "boot.tip.1": "Every machine has a story. Talk to the staff to find out.",
   "boot.tip.2": "Press J to see your quests and pick which one to follow.",
   "boot.tip.3": "Sofía’s and Daniel’s upgrades really change the hall: light, cleaning and décor.",

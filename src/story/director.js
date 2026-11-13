@@ -770,16 +770,23 @@ export class StoryDirector {
       const rt = new THREE.WebGLRenderTarget(size, size);
       const cam = new THREE.PerspectiveCamera(24, 1, 0.05, 30);
       const head = h.npcs.headPosition(npc, new THREE.Vector3());
-      const yaw = n.yaw;
+      // desde donde está el jugador (no hacia donde mira el personaje: si aún no se ha girado, la cámara quedaba
+      // dentro de la máquina o la pared que tenía delante y el retrato salía de otra cosa)
+      const pp = h.getPlayerPos();
+      let yaw = Math.atan2(pp.x - head.x, pp.z - head.z);
+      if (!Number.isFinite(yaw)) yaw = n.yaw;
       cam.position.set(head.x + Math.sin(yaw) * 0.85, head.y + 0.03, head.z + Math.cos(yaw) * 0.85);
       cam.lookAt(head.x, head.y - 0.02, head.z);
       const prev = renderer.getRenderTarget();
+      const wasVisible = n.rig?.model?.visible;
+      if (n.rig?.model) n.rig.model.visible = true;
       renderer.setRenderTarget(rt);
       renderer.clear();
       renderer.render(h.world.scene, cam);
       const px = new Uint8Array(size * size * 4);
       renderer.readRenderTargetPixels(rt, 0, 0, size, size, px);
       renderer.setRenderTarget(prev);
+      if (n.rig?.model) n.rig.model.visible = wasVisible;
       rt.dispose();
       const c = document.createElement('canvas');
       c.width = c.height = size;

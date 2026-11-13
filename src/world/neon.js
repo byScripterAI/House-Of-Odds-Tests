@@ -46,6 +46,71 @@ const inside = (p, poly) => {
   return c;
 };
 
+/** Simplificación Ramer–Douglas–Peucker de un contorno cerrado (en unidades «em»): mismas curvas, menos vértices. */
+function simplify(flat, tol) {
+  const n = flat.length / 2;
+  if (n < 8) return flat;
+  const keep = new Uint8Array(n);
+  const rdp = (a, b) => {
+    const ax = flat[a * 2], ay = flat[a * 2 + 1], bx = flat[b * 2], by = flat[b * 2 + 1];
+    const dx = bx - ax, dy = by - ay;
+    const len = Math.hypot(dx, dy) || 1e-9;
+    let best = -1, bd = tol;
+    for (let i = a + 1; i < b; i++) {
+      const d = Math.abs((flat[i * 2] - ax) * dy - (flat[i * 2 + 1] - ay) * dx) / len;
+      if (d > bd) { bd = d; best = i; }
+    }
+    if (best < 0) return;
+    keep[best] = 1;
+    rdp(a, best);
+    rdp(best, b);
+  };
+  // punto más lejano al primero como segundo ancla (contorno cerrado)
+  let far = 1, fd = 0;
+  for (let i = 1; i < n; i++) {
+    const d = Math.hypot(flat[i * 2] - flat[0], flat[i * 2 + 1] - flat[1]);
+    if (d > fd) { fd = d; far = i; }
+  }
+  keep[0] = keep[far] = 1;
+  rdp(0, far);
+  // tramo de cierre: de `far` al final y vuelta al primero
+  const tail = [...flat.slice(far * 2), flat[0], flat[1]];
+  const sub = simplify.closing(tail, tol);
+  const out = [];
+  for (let i = 0; i <= far; i++) if (keep[i]) out.push(flat[i * 2], flat[i * 2 + 1]);
+  for (let i = 1; i < sub.length / 2 - 1; i++) out.push(sub[i * 2], sub[i * 2 + 1]);
+  return out.length >= 6 ? out : flat;
+}
+/** RDP de una polilínea abierta (extremos fijos). */
+simplify.closing = (flat, tol) => {
+  const n = flat.length / 2;
+  const keep = new Uint8Array(n);
+  keep[0] = keep[n - 1] = 1;
+  const rdp = (a, b) => {
+    const ax = flat[a * 2], ay = flat[a * 2 + 1], bx = flat[b * 2], by = flat[b * 2 + 1];
+    const dx = bx - ax, dy = by - ay;
+    const len = Math.hypot(dx, dy) || 1e-9;
+    let best = -1, bd = tol;
+    for (let i = a + 1; i < b; i++) {
+      const d = Math.abs((flat[i * 2] - ax) * dy - (flat[i * 2 + 1] - ay) * dx) / len;
+      if (d > bd) { bd = d; best = i; }
+    }
+    if (best < 0) return;
+    keep[best] = 1;
+    rdp(a, best);
+    rdp(best, b);
+  };
+  rdp(0, n - 1);
+  const out = [];
+  for (let i = 0; i < n; i++) if (keep[i]) out.push(flat[i * 2], flat[i * 2 + 1]);
+  return out;
+};
+const simplified = new Map();
+const glyphContours = (ch) => {
+  if (!simplified.has(ch)) simplified.set(ch, (FONT.glyphs[ch]?.c ?? []).map((flat) => simplify(flat, 0.0025)));
+  return simplified.get(ch);
+};
+
 /** Contornos de un texto colocados (en metros), centrados. Devuelve [{char, index, contours:[Vector2[]]}]. */
 function layout(text, size, y0) {
   const chars = [...text];
@@ -56,7 +121,7 @@ function layout(text, size, y0) {
   chars.forEach((ch, index) => {
     const g = FONT.glyphs[ch];
     if (g?.c.length) {
-      const contours = g.c.map((flat) => {
+      const contours = glyphContours(ch).map((flat) => {
         const pts = [];
         for (let i = 0; i < flat.length; i += 2) pts.push(new THREE.Vector2(cursor + flat[i] * size, y0 + flat[i + 1] * size));
         return pts;
@@ -69,7 +134,7 @@ function layout(text, size, y0) {
 }
 
 /** Letra de canal: contornos exteriores con sus huecos, extruida. */
-function letterGeometry(contours, depth) {
+function letterGeometry(contours, depth, fine = true) {
   const sorted = contours.map((c) => ({ c, a: area(c) })).sort((p, q) => Math.abs(q.a) - Math.abs(p.a));
   if (!sorted.length) return null;
   const outerSign = Math.sign(sorted[0].a);
@@ -84,7 +149,7 @@ function letterGeometry(contours, depth) {
   }
   if (!shapes.length) return null;
   // bisel fino: el canto de latón brilla alrededor de la cara iluminada
-  return new THREE.ExtrudeGeometry(shapes, { depth, bevelEnabled: true, bevelThickness: depth * 0.22, bevelSize: depth * 0.07, bevelSegments: 2, curveSegments: 1 });
+  return new THREE.ExtrudeGeometry(shapes, { depth, bevelEnabled: true, bevelThickness: depth * 0.2, bevelSize: depth * 0.045, bevelSegments: fine ? 2 : 1, curveSegments: 1 });
 }
 
 /** Separa una ExtrudeGeometry en [caras (tapas), cantos (laterales y bisel)]. */
@@ -146,7 +211,7 @@ export function createNeonSign(ctx, text, o) {
     const sides = [];
     const letter = (gl, sz, isDead) => {
       const depth = Math.max(0.02, sz * 0.09);
-      const lg = letterGeometry(gl.contours, depth);
+      const lg = letterGeometry(gl.contours, depth, (ctx.g?.detail ?? 1) >= 1);
       if (!lg) return;
       const [caps, walls] = splitExtrude(lg);
       (isDead ? facesDead : faces).push(...caps);

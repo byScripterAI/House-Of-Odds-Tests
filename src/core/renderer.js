@@ -31,6 +31,9 @@ export class GameRenderer {
   #bus;
   #contextAntialias;
   #post;
+  /** Escala dinámica de resolución (calidad automática): multiplica a `renderScale`. */
+  dynamicScale = 1;
+  #frame = 0;
 
   constructor({ canvas, graphics, bus = null }) {
     this.#canvas = canvas;
@@ -57,6 +60,9 @@ export class GameRenderer {
     // PCFSoftShadowMap está retirado desde three r186; PCFShadowMap es el tipo suave estándar.
     this.webgl.shadowMap.type = THREE.PCFShadowMap;
     this.webgl.shadowMap.enabled = this.settings.shadows;
+    // la sombra se redibuja a mano: en MEDIA uno de cada dos fotogramas (a 60 fps no se nota y ahorra media
+    // pasada de sombras); en ALTA y ULTRA, siempre
+    this.webgl.shadowMap.autoUpdate = false;
     this.#post = new PostFX(this.webgl);
 
     canvas.addEventListener('webglcontextlost', this.#onContextLost);
@@ -78,11 +84,17 @@ export class GameRenderer {
     return { antialiasNeedsRestart };
   }
 
+  /** La interfaz sabe la calidad (en BAJA y MUY BAJA se quitan los desenfoques de fondo, que cuestan mucho). */
+  #tagQuality() {
+    if (typeof document !== 'undefined') document.documentElement.dataset.quality = this.settings.quality;
+  }
+
   resize() {
+    this.#tagQuality();
     const width = Math.max(1, window.innerWidth);
     const height = Math.max(1, window.innerHeight);
     const pixelRatio =
-      Math.min(window.devicePixelRatio || 1, this.settings.pixelRatioCap) * this.settings.renderScale;
+      Math.min(window.devicePixelRatio || 1, this.settings.pixelRatioCap) * this.settings.renderScale * this.dynamicScale;
 
     this.webgl.setPixelRatio(pixelRatio);
     this.webgl.setSize(width, height, false); // el tamaño CSS lo fija main.css
@@ -91,8 +103,19 @@ export class GameRenderer {
     this.#bus?.emit('renderer:resize', this.size);
   }
 
+  /** Cambia la escala dinámica (0,5–1) sin tocar el resto de ajustes. */
+  setDynamicScale(k) {
+    const v = Math.max(0.5, Math.min(1, k));
+    if (Math.abs(v - this.dynamicScale) < 0.01) return;
+    this.dynamicScale = v;
+    this.resize();
+  }
+
   render(scene, camera, dt = 0.016) {
     if (this.contextLost) return;
+    this.#frame++;
+    const sm = this.webgl.shadowMap;
+    if (sm.enabled) sm.needsUpdate = this.settings.quality !== 'medium' || this.#frame % 2 === 0 || this.#frame < 3;
     if (!this.#post.render(scene, camera, dt)) this.webgl.render(scene, camera);
   }
 

@@ -28,7 +28,8 @@ const lib = {
 function prepareMaterials(scene) {
   scene.traverse((o) => {
     if (!o.isMesh) return;
-    o.frustumCulled = false; // la caja de la pose de reposo no sigue a la animación
+    // la caja de la pose de reposo no sigue a la animación: el recorte por cámara lo hace NpcSystem por personaje
+    o.frustumCulled = false;
     const mats = [].concat(o.material);
     for (const m of mats) {
       m.envMapIntensity = 0.55;
@@ -61,7 +62,13 @@ function prepareMaterials(scene) {
 async function loadFile(f, onDone) {
   try {
     const gltf = await gltfLoader().loadAsync(f.url);
-    if (f.kind === 'anims') for (const c of gltf.animations) lib.clips[f.g].set(c.name, c);
+    if (f.kind === 'anims') {
+      for (const c of gltf.animations) {
+        // pista auxiliar del exportador sin hueso en los modelos (avisaba en consola al reproducirse)
+        c.tracks = c.tracks.filter((tr) => !tr.name.startsWith('MotionExtractionHelper'));
+        lib.clips[f.g].set(c.name, c);
+      }
+    }
     else {
       prepareMaterials(gltf.scene);
       lib.models.set(f.name, gltf.scene);
@@ -100,6 +107,9 @@ export async function loadCustomers() {
   });
   return lib.customersLoading;
 }
+
+/** Plantillas cargadas (para compilar sus shaders durante la carga, antes de que aparezcan). */
+export const characterTemplates = () => [...lib.models.values()];
 
 /** ¿Han terminado de cargar los clientes? (sin personajes reales no hay nada que esperar) */
 export const customersReady = () => !lib.ready || !!lib.customersDone;

@@ -56,6 +56,7 @@ export default {
   "ui.beta.p3": "Wenn du einen findest, notiere, was du gemacht hast und was passiert ist, und schick es dem Entwickler des Spiels. Jede Meldung hilft!",
   "ui.beta.version": "Version {v}",
   "ui.beta.go": "Verstanden, los geht’s",
+  "boot.tipLabel": "Tipp",
   "boot.tip.1": "Jede Maschine hat ihre Geschichte. Sprich mit dem Personal, um sie zu erfahren.",
   "boot.tip.2": "Drücke J, um deine Aufträge zu sehen und einen zu verfolgen.",
   "boot.tip.3": "Die Verbesserungen von Sofía und Daniel verändern den Saal wirklich: Licht, Sauberkeit und Dekor.",

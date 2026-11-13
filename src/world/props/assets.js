@@ -17,6 +17,8 @@ export const PROP_FILES = Object.freeze([
 ]);
 
 const BASE = new URL('../../../assets/props/', import.meta.url).href;
+/** Escala propia de algunos modelos (para que encajen en tamaño con el resto del mobiliario). */
+export const PROP_SCALE = Object.freeze({ sofa: 1.25 });
 const templates = new Map();
 
 export async function loadProps(onProgress = () => {}) {
@@ -26,6 +28,12 @@ export async function loadProps(onProgress = () => {}) {
     try {
       const gltf = await loader.loadAsync(`${BASE}${name}.glb`);
       const root = gltf.scene;
+      // la maceta de muestra trae dos luciérnagas animadas (6 mallas diminutas por planta): fuera
+      const drop = [];
+      root.traverse((o) => {
+        if (/firefly/i.test(o.name)) drop.push(o);
+      });
+      for (const o of drop) o.removeFromParent();
       root.traverse((o) => {
         if (!o.isMesh) return;
         o.userData.sharedAsset = true; // no se libera al reconstruir el casino
@@ -35,9 +43,13 @@ export async function loadProps(onProgress = () => {}) {
         }
       });
       // apoyado en el suelo y centrado en XZ
+      // tamaño de casino: el sofá de muestra era pequeño al lado de los sillones (0,8 m de alto frente a 1,07)
+      const k = PROP_SCALE[name] ?? 1;
+      root.scale.multiplyScalar(k);
+      root.updateMatrixWorld(true);
       const box = new THREE.Box3().setFromObject(root);
       const c = box.getCenter(new THREE.Vector3());
-      root.position.set(-c.x, -box.min.y, -c.z);
+      root.position.set(root.position.x - c.x, root.position.y - box.min.y, root.position.z - c.z);
       const wrap = new THREE.Group();
       wrap.add(root);
       wrap.userData.size = box.getSize(new THREE.Vector3());

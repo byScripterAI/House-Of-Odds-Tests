@@ -115,9 +115,9 @@ export function buildDecorSets(ctx, { addCollider }) {
       const x = sx * 3.25;
       const sofa = adopt(s, placeProp(ctx, 'sofa', { x, z: 8.0, yaw: -sx * Math.PI / 2 }));
       if (!sofa) continue;
-      s.colliders.push(addCollider(x, 8.0, 0.8, 1.7, false));
+      s.colliders.push(addCollider(x, 8.0, 1.0, 2.05, false));
       // mesilla clásica a cada lado con flores
-      for (const z of [6.95, 9.05]) {
+      for (const z of [6.7, 9.3]) {
         const ns = adopt(s, placeProp(ctx, 'nightstand', { x, z, yaw: -sx * Math.PI / 2 }));
         if (!ns) continue;
         adopt(s, placeProp(ctx, 'vase', { x, y: 0.7, z, height: 0.34 }));

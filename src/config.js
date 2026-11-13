@@ -8,7 +8,7 @@
 export const GAME = Object.freeze({
   id: 'house-of-odds',
   name: 'HOUSE OF ODDS',
-  version: '0.6.2',
+  version: '0.6.4',
   /** Fase de desarrollo: se muestra junto al logo y en el aviso al empezar partida. */
   stage: 'beta',
 });
@@ -86,7 +86,7 @@ export const QUALITY_PROFILES = Object.freeze({
     textureSize: 128,
     anisotropy: 1,
     reflections: true,
-    dynamicLights: 8,
+    dynamicLights: 6,
     crowdMax: 6,
     npcDetail: 0,
     propDensity: 0.35,
@@ -104,7 +104,7 @@ export const QUALITY_PROFILES = Object.freeze({
     textureSize: 256,
     anisotropy: 2,
     reflections: true,
-    dynamicLights: 10,
+    dynamicLights: 8,
     crowdMax: 12,
     npcDetail: 1,
     propDensity: 0.6,
@@ -179,6 +179,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     screenFx: true, // sacudidas y destellos de pantalla (las partículas siempre se muestran)
     auto: true, // calidad automática según el equipo (se desactiva al elegir una a mano)
     detected: '', // última calidad detectada ('' = aún sin detectar)
+    detectVersion: 0, // versión de las reglas con las que se detectó (si mejoran, se vuelve a medir)
   }),
   audio: Object.freeze({
     master: 0.8,

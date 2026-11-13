@@ -24,6 +24,10 @@ HOUSE OF ODDS es un juego de VANTA INTERACTIVE. Además del código y los recurs
 - Origen: https://polyhaven.com — licencia CC0 1.0 (dominio público). Texturas reducidas a WebP y geometría comprimida.
 
 ## Modelos propios (VANTA INTERACTIVE)
+
+También propios: pilastras, puertas, lámparas colgantes, mostrador, recepción, rueda de ruleta, cubo y caballete
+(`scripts/models/architecture.py`), los seis cuadros (`scripts/art/paintings.py`) y el render de la pantalla de carga
+(`scripts/models/keyart.py`, Blender Cycles).
 - THE CLASSIC, tragaperras de sala «LUCKY 7» y su funda, taburetes, mesas de blackjack y ruleta, banco, lámpara de pie,
   pedestal y escultura dorada: modelados para el juego con Blender (fuentes en `scripts/models/`).
 - Rótulos de neón 3D construidos con los contornos de Cinzel (SIL OFL 1.1).

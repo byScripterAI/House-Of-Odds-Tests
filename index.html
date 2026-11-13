@@ -8,6 +8,7 @@
   <meta name="description" content="HOUSE OF ODDS — a 3D casino arcade adventure.">
   <title>HOUSE OF ODDS</title>
   <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+  <link rel="preload" as="image" href="assets/ui/keyart.webp" type="image/webp">
   <link rel="stylesheet" href="styles/main.css">
   <link rel="stylesheet" href="styles/menus.css">
   <link rel="stylesheet" href="styles/hud.css">
@@ -29,22 +30,27 @@
   <div id="ui-root"></div>
 
   <div id="boot-screen" class="boot" role="status" aria-live="polite">
-    <div class="boot__rays" aria-hidden="true"></div>
-    <div class="boot__frame" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
-    <div class="boot__center">
+    <div class="boot__art" aria-hidden="true"></div>
+    <div class="boot__shade" aria-hidden="true"></div>
+    <div class="boot__grain" aria-hidden="true"></div>
+    <div class="boot__brand">
       <div class="boot__kicker">VANTA INTERACTIVE</div>
-      <h1 class="boot__logo">HOUSE<i>OF</i><b>ODDS</b><span class="boot__beta">BETA</span></h1>
-      <div class="boot__progress">
-        <div class="boot__row">
-          <p id="boot-message" class="boot__message">Loading…</p>
-          <span id="boot-pct" class="boot__pct">0<small>%</small></span>
-        </div>
-        <div class="boot__bar" aria-hidden="true"><div id="boot-fill" class="boot__fill"></div><div id="boot-head" class="boot__head"></div></div>
-        <ol id="boot-steps" class="boot__steps" aria-hidden="true"><li></li><li></li><li></li><li></li><li></li></ol>
+      <h1 class="boot__logo">HOUSE<i>OF</i><b>ODDS<span class="boot__beta">BETA</span></b></h1>
+      <p id="boot-tagline" class="boot__tagline"></p>
+    </div>
+    <div class="boot__bottom">
+      <div class="boot__tipbox" aria-hidden="true">
+        <span id="boot-tiplabel" class="boot__tiplabel">TIP</span>
+        <p id="boot-tip" class="boot__tip"></p>
+      </div>
+      <div class="boot__status">
+        <p id="boot-message" class="boot__message">Loading…</p>
+        <span id="boot-pct" class="boot__pct">0<small>%</small></span>
+        <svg class="boot__chip" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="14.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="16" cy="16" r="9" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.7"/><g stroke="currentColor" stroke-width="3.2" stroke-linecap="butt"><path d="M16 1.5v4.2M16 26.3v4.2M1.5 16h4.2M26.3 16h4.2M5.75 5.75l3 3M23.25 23.25l3 3M26.25 5.75l-3 3M8.75 23.25l-3 3"/></g><path d="M16 11.5l3 4.5-3 4.5-3-4.5z" fill="currentColor"/></svg>
       </div>
     </div>
-    <p id="boot-tip" class="boot__tip" aria-hidden="true"></p>
-    <div class="boot__foot" aria-hidden="true"><span id="boot-version">v0.6.2 · BETA</span><span class="boot__chip"></span></div>
+    <div class="boot__bar" aria-hidden="true"><div id="boot-fill" class="boot__fill"></div><div id="boot-head" class="boot__head"></div></div>
+    <span id="boot-version" class="boot__version" aria-hidden="true">v0.6.4 · BETA</span>
   </div>
 
   <noscript>

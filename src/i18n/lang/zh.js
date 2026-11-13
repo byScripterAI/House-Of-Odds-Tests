@@ -5,6 +5,7 @@ export default {
   'boot.renderer': '正在初始化渲染器…',
   'boot.loop': '正在准备游戏循环…',
   'boot.casino': '正在建造赌场…',
+  'boot.shaders': '正在点亮灯光…',
   'boot.characters': '员工正在就位…',
   'boot.ready': '就绪',
   'fatal.webgl.title': '3D 图形不可用',

@@ -14,12 +14,13 @@ import { pickInteractable } from './systems/movement.js';
 import { CameraRig } from './camera.js';
 import { Player } from './player.js';
 import { createWorld } from './world/world.js';
-import { DECOR_SLOTS } from './world/layout.js';
+import { DECOR_SLOTS, STORY_SPOTS } from './world/layout.js';
 import { NpcSystem } from './entities/npc-system.js';
+import { characterTemplates } from './entities/character-assets.js';
 import { StoryDirector } from './story/director.js';
 import { Markers } from './world/markers.js';
 import { DECOR_SETS } from './world/props/decor-sets.js';
-import { detectQuality } from './core/hardware.js';
+import { DETECT_VERSION, detectQuality } from './core/hardware.js';
 import { nextLuckState, resolveBalancedSpin } from './systems/luck-director.js';
 import { DialogueBox } from './ui/dialogue-box.js';
 import { QuestLog } from './ui/quest-log.js';
@@ -38,6 +39,9 @@ import { TableController } from './games/table-controller.js';
 
 const { MAIN_MENU, EXPLORING, INTERACTING, PAUSED, MANAGER, DIALOGUE, CINEMATIC, TABLE } = STATES;
 const EFFECT_BY_ID = new Map(Object.entries(EFFECTS));
+const _panelPos = new THREE.Vector3();
+const _panelTarget = new THREE.Vector3();
+const _blendTarget = new THREE.Vector3();
 
 /**
  * Aplicación: cablea mundo, jugador, cámara, interfaz, audio y guardado.
@@ -46,7 +50,7 @@ const EFFECT_BY_ID = new Map(Object.entries(EFFECTS));
  */
 export class App {
   /** @param {{game: import('./core/game.js').Game, uiRoot: HTMLElement, save: import('./save/save-manager.js').SaveManager}} deps */
-  constructor({ game, uiRoot, save }) {
+  constructor({ game, uiRoot, save, world = null }) {
     this.game = game;
     this.bus = game.bus;
     this.uiRoot = uiRoot;
@@ -59,7 +63,11 @@ export class App {
     setUiAudio(this.audio);
 
     // --- mundo, jugador y cámara ---
-    this.world = createWorld({ renderer: game.renderer.webgl, graphics: game.renderer.settings });
+    // el mundo llega ya construido desde la pantalla de carga (por pasos); si no, se construye aquí de golpe
+    this.world = world ?? createWorld({ renderer: game.renderer.webgl, graphics: game.renderer.settings });
+    if (!world) this.world.loadSync();
+    // los personajes (aunque aún no estén en la sala) se compilan durante la carga: nada de tirones al aparecer
+    this.world.warmExtras = () => characterTemplates();
     this.npcs = new NpcSystem({ world: this.world, graphics: game.renderer.settings });
     // ruido de clientes (ruleta, fichas, vítores…) solo con el casino abierto y gente dentro
     this.audio.lifeGate = () => (this.#crowdPresent() ? this.npcs.crowd : 0);
@@ -268,7 +276,7 @@ export class App {
         this.world.onGraphicsChanged(next);
         this.npcs.configure(next);
       }
-      await this.world.precompile();
+      await this.world.warmup();
       this.rebuilding = false;
       this.busyVeil.classList.remove('is-on');
     };
@@ -331,7 +339,10 @@ export class App {
     const s = this.state.current;
     if (s !== PAUSED) this.#runTimers(dt);
     this.#watchPerformance(dt);
-    if (s === EXPLORING) this.player.update(dt);
+    if (s === EXPLORING) {
+      this.player.update(dt);
+      this.#keepOutOfPeople();
+    }
     this.rig.update(dt);
     this.world.update(dt, time, { paused: s === PAUSED });
     if (s !== PAUSED) this.npcs.update(dt, { player: { x: this.player.pos.x, z: this.player.pos.z, y: this.player.eye.y }, camera: this.world.camera });
@@ -759,8 +770,8 @@ export class App {
     const isMachine = up.branch === 'machine';
     const color = isMachine ? '#58e6ff' : '#ffd76a';
     // limpieza: pantalla en negro LLAMANDO… → EN CAMINO… → LIMPIANDO… (2 s cada una) y luego el resultado
-    // luces: palanca, un segundo de silencio y se encienden de golpe
-    const PRE = spec.kind === 'clean' ? 6.2 : spec.kind === 'lighting' ? 1.2 : 0;
+    // luces: se abre el cuadro eléctrico de la pared, «clac» del general y se encienden de golpe
+    const PRE = spec.kind === 'clean' ? 6.2 : spec.kind === 'lighting' ? 2.6 : 0;
     const ARRIVE = PRE + (spec.kind === 'lighting' ? 0 : 1.1);
     if (['carpet', 'statue', 'chandelier', 'machine'].includes(spec.kind) || spec.kind.startsWith('set:')) this.world.reveal(spec.kind, ARRIVE);
     if (spec.kind !== 'clean' && spec.kind !== 'lighting') this.world.applyProgress(this.progress.loadout(), { animate: spec.kind === 'wing' });
@@ -778,6 +789,17 @@ export class App {
         pos.x = Math.max(B.minX + 0.6, Math.min(B.maxX - 0.6, pos.x));
         pos.z = Math.max(B.minZ + 0.6, Math.min(B.maxZ - 0.6, pos.z));
         pos.y = Math.max(0.8, Math.min(ceiling, pos.y));
+        if (spec.kind === 'lighting') {
+          // primero el cuadro eléctrico de cerca (se abre, se acciona el general, se cierra) y luego la sala
+          const bk = STORY_SPOTS.breaker;
+          const k = Math.max(0, Math.min(1, (time - PRE + 0.2) / 0.9));
+          const e = k * k * (3 - 2 * k);
+          _panelPos.set(bk.x + 0.75, 1.62, bk.z + 1.55);
+          _panelTarget.set(bk.x + 0.05, 1.5, bk.z);
+          pos.lerpVectors(_panelPos, pos, e);
+          _blendTarget.lerpVectors(_panelTarget, target, e);
+          return { position: pos, target: _blendTarget };
+        }
         return { position: pos, target };
       },
       PRE + 4.4,
@@ -797,8 +819,12 @@ export class App {
           this.#after(5.9, () => this.world.applyProgress(this.progress.loadout(), { animate: false }));
           this.#after(PRE, () => this.#blackoutText(null));
         } else if (spec.kind === 'lighting') {
-          this.audio.sfx('breakerLever');
-          this.#after(1.0, () => {
+          // se abre el cuadro eléctrico de la pared, «clac» del general y se vuelve a cerrar
+          this.world.operateBreaker(2.5);
+          this.audio.sfx('doorOpen');
+          this.#after(0.85, () => this.audio.sfx('breakerLever'));
+          this.#after(2.0, () => this.audio.sfx('doorClose'));
+          this.#after(1.3, () => {
             this.world.applyProgress(this.progress.loadout(), { animate: false });
             this.world.lightsFlicker();
             this.audio.sfx('lightsOn');
@@ -1365,7 +1391,9 @@ export class App {
     const g = this.game.settings.graphics;
     g.auto = true;
     g.detected = tier;
+    g.detectVersion = DETECT_VERSION;
     g.quality = tier;
+    this.game.renderer.setDynamicScale(1);
     this.#onSettingsChanged();
     this.notifyAutoQuality(tier);
   }
@@ -1385,29 +1413,63 @@ export class App {
    * baja un nivel y lo avisa. Nunca sube solo (evita que oscile).
    */
   #watchPerformance(dt) {
+    void dt;
     const g = this.game.settings.graphics;
-    if (!g.auto || this.rebuilding || !this.#playing() || g.quality === 'veryLow') {
+    const r = this.game.renderer;
+    if (!g.auto || this.rebuilding || document.hidden) {
       this.perf = null;
+      if (!g.auto && r.dynamicScale !== 1) r.setDynamicScale(1);
       return;
     }
-    void dt;
     const now = performance.now();
-    const p = (this.perf ??= { t0: now, frames: 0, slow: 0 });
+    const p = (this.perf ??= { t0: now, frames: 0, slow: 0, good: 0 });
     p.frames += 1;
     const elapsed = (now - p.t0) / 1000;
-    if (elapsed < 4) return;
+    if (elapsed < 2) return;
     const fps = p.frames / elapsed;
-    p.slow = fps < 24 ? p.slow + 1 : 0;
     p.t0 = now;
     p.frames = 0;
-    if (p.slow >= 4) {
+    if (elapsed > 5) return; // venía de una pausa larga (pestaña oculta, alerta…): no cuenta
+    // 1) RESOLUCIÓN DINÁMICA (como en consola): si no llega a ~50 fps baja un poco la resolución interna y la
+    //    recupera cuando sobra. La calidad (luces, sombras, materiales) no se toca.
+    if (fps < 48) {
+      r.setDynamicScale(r.dynamicScale - (fps < 30 ? 0.15 : 0.08));
+      p.good = 0;
+    } else if (fps > 57 && r.dynamicScale < 1 && ++p.good >= 3) {
+      r.setDynamicScale(r.dynamicScale + 0.05);
+      p.good = 1;
+    }
+    // 2) si ni con la resolución al mínimo va fluido, baja un nivel de calidad (nunca sube solo)
+    p.slow = fps < 26 && r.dynamicScale <= 0.62 ? p.slow + 1 : 0;
+    if (p.slow >= 3 && g.quality !== 'veryLow') {
       p.slow = 0;
       const i = QUALITY_ORDER.indexOf(g.quality);
       const next = QUALITY_ORDER[Math.max(0, i - 1)];
       g.quality = next;
       g.detected = next;
+      r.setDynamicScale(0.85);
       this.#onSettingsChanged();
-      this.hud.toast({ title: t('ui.settings.autoQuality'), text: t('ui.toast.qualityLowered', { q: t(`settings.quality.${next}`) }), kind: 'info' });
+      if (this.inGame) this.hud.toast({ title: t('ui.settings.autoQuality'), text: t('ui.toast.qualityLowered', { q: t(`settings.quality.${next}`) }), kind: 'info' });
+      else this.pendingAutoToast = next;
+    }
+  }
+
+  /**
+   * El jugador no atraviesa a la gente: si se acerca demasiado a un personaje se le aparta con suavidad.
+   * (Antes la cámara podía meterse dentro de una cabeza y media pantalla se veía negra un instante.)
+   */
+  #keepOutOfPeople() {
+    const p = this.player.pos;
+    for (const n of this.npcs.npcs) {
+      if (n.rig?.group && !n.rig.group.visible) continue;
+      const dx = p.x - n.pos.x;
+      const dz = p.z - n.pos.z;
+      const d = Math.hypot(dx, dz);
+      const min = 0.55;
+      if (d < min && d > 1e-4) {
+        p.x = n.pos.x + (dx / d) * min;
+        p.z = n.pos.z + (dz / d) * min;
+      }
     }
   }
 

@@ -4,6 +4,7 @@ import { CELLS, cellCenter, cellOf, hitCell } from './roulette-layout.js';
 import { WHEEL, colorOf, covers } from './roulette.js';
 import { CHIP_H, makeChipStack, makePracticeChip } from './table-assets.js';
 import { Tweens, ease } from './tween.js';
+import { hasModel, instantiate } from '../world/props/models.js';
 
 /**
  * ROYAL ROULETTE en 3D: rueda europea real (37 casillas en su orden, trastes, cono y torreta)
@@ -134,6 +135,30 @@ export class RouletteView {
     const wood = this.#mat({ color: 0x3a1c0e, roughness: 0.32, metalness: 0.05 });
     this.goldMat = this.#mat({ color: 0xd4af37, roughness: 0.25, metalness: 1 });
     const brass = this.#mat({ color: 0xb8892a, roughness: 0.3, metalness: 0.9 });
+    // rueda modelada (cuenco torneado con canto chapado, rombos, rotor con trastes, cono y torreta): pocas mallas
+    if (hasModel('wheel')) {
+      const model = instantiate('wheel', (key) => (key === 'gold' ? this.goldMat : null));
+      model.traverse((o) => {
+        if (o.isMesh) o.castShadow = o.receiveShadow = true;
+      });
+      wheel.add(model);
+      this.rotor = model.getObjectByName('Rotor') ?? new THREE.Group();
+      this.discTex = this.#own(rotorTexture());
+      const disc = new THREE.Mesh(this.#own(new THREE.CircleGeometry(R_DISC - 0.004, 96)), this.#mat({ map: this.discTex, roughness: 0.35, metalness: 0.05 }));
+      disc.rotation.x = -Math.PI / 2;
+      disc.position.y = H_DISC + 0.0005;
+      disc.receiveShadow = true;
+      this.rotor.add(disc);
+      this.ball = new THREE.Mesh(this.#own(new THREE.SphereGeometry(BALL_R, 20, 14)), this.#mat({ color: 0xf8f6f0, roughness: 0.12, metalness: 0.0 }));
+      this.ball.castShadow = true;
+      wheel.add(this.ball);
+      this.ballAngle = 0;
+      this.ballR = R_POCKET;
+      this.#placeBall();
+      void wood;
+      void brass;
+      return;
+    }
     // cuenco (fijo): pared interior inclinada por donde corre la bola, labio y canto exterior
     const profile = [[0.352, 0.035], [0.36, H_DISC], [0.39, 0.075], [0.445, 0.112], [0.49, 0.126], [0.52, 0.132], [0.538, 0.122], [0.545, 0.07], [0.54, 0.0]].map(([r, h]) => new THREE.Vector2(r, h));
     const bowl = new THREE.Mesh(this.#own(new THREE.LatheGeometry(profile, 72)), this.#mat({ color: 0x4a2412, roughness: 0.28, metalness: 0.05, side: THREE.DoubleSide }));

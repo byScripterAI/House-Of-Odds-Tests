@@ -37,7 +37,7 @@ Los nombres de archivo deben ir en **minúsculas** (los servidores Linux disting
 | ESC | Pausa; cierra paneles |
 | F3 / F4 | Diagnóstico / cambiar calidad (con el diagnóstico visible) |
 
-## Cómo se juega (0.6.1 BETA)
+## Cómo se juega (0.6.4 BETA)
 
 - Llegas a un casino venido a menos: **sucio, lleno de trastos, con goteras, grietas y THE CLASSIC averiada**, sin
   clientes ni crupieres. Victoria Hawthorne, la directora,

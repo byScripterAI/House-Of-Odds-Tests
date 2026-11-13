@@ -33,3 +33,12 @@ sus materiales (`src/world/props/models.js`), así encajan con la luz, la sucied
 
 Aplana los contornos de Cinzel en `assets/fonts/cinzel-neon.json`; `src/world/neon.js` construye con ellos las letras
 de canal y los tubos de neón 3D.
+
+## Arquitectura, cuadros y pantalla de carga
+
+- `scripts/models/architecture.py` → pilaster, door_frame_22/40, door_leaves_22/40, pendant, counter, reception,
+  wheel, bucket, wetsign (`ONLY=<función>` para una sola). Después `squeeze.mjs`.
+- `scripts/art/paintings.py assets/art` → los seis cuadros (WebP 1024×1360).
+- `scripts/models/keyart.py assets/ui/keyart.png 1920 64` → render Cycles de la pantalla de carga; convertir a
+  `assets/ui/keyart.webp`.
+- Atrezo simplificado: `lod.mjs` (gltf-transform + meshoptimizer) por malla con un tope de triángulos.

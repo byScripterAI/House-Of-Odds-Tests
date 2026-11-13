@@ -109,7 +109,7 @@ export const doorsOn = (wall) => DOORS.filter((d) => d.wall === wall);
 
 /** Posición de mundo y orientación (yaw del panel) de una puerta. */
 export function doorPlacement(door) {
-  const o = HALL.wall / 2 - 0.02; // cara interior del muro
+  const o = 0; // justo en la cara interior del muro (antes quedaba 18 cm por delante y se veía un hueco)
   switch (door.wall) {
     case 'west': return { x: HALL.minX + o, z: door.at, yaw: Math.PI / 2, inward: { x: 1, z: 0 } };
     case 'east': return { x: HALL.maxX - o, z: door.at, yaw: -Math.PI / 2, inward: { x: -1, z: 0 } };
@@ -132,7 +132,9 @@ export function staticColliders() {
   for (const [a, b] of wallRuns(HALL.minZ, HALL.maxZ, doorsOn('east'))) box(HALL.maxX + t / 2, (a + b) / 2, t, b - a);
   void wx; void wz;
   // Mostrador
-  box(COUNTER.x, COUNTER.z + 0.2, COUNTER.width + 0.2, COUNTER.depth + 0.9, { id: 'counter' });
+  // Mostrador de servicios: TODO el conjunto (mueble, mamparas laterales y zona del empleado hasta la pared), sin
+  // huecos entre el mueble y las mamparas por los que colarse detrás
+  box(COUNTER.x, (HALL.minZ + COUNTER.front - 0.25) / 2, COUNTER.width + 1.3, COUNTER.front - 0.25 - HALL.minZ, { id: 'counter' });
   // Estrado de THE CLASSIC (solo el cuerpo de la máquina; el estrado se pisa)
   box(CLASSIC.x, CLASSIC.z + 0.2, 1.95, 1.5, { id: 'classic' });
   // Mesas

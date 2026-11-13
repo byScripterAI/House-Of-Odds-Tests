@@ -40,6 +40,7 @@ export class Fx {
   #h = 1;
   #dpr = 1;
   #coinSprite = null;
+  #dirty = false;
   /** Se pueden desactivar sacudidas y destellos (accesibilidad) sin perder las partículas. */
   screenFx = true;
   /** Multiplicador de cantidad de partículas (calidad gráfica). */
@@ -299,10 +300,25 @@ export class Fx {
 
   // ------------------------------------------------------------------ bucle
 
+  /** ¿Hay algo que dibujar o mover? (si no, el lienzo ni se toca: cero coste en reposo) */
+  get #busy() {
+    return this.#parts.length || this.#rockets.length || this.#rings.length || this.#flash.a > 0.003 || this.#trauma > 0.001 || Math.abs(this.#kick.x) + Math.abs(this.#kick.y) > 0.2;
+  }
+
   update(dt) {
     dt = Math.min(dt, 0.05);
     this.#time += dt;
     const ctx = this.#ctx;
+    if (!this.#busy) {
+      if (this.#dirty) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, this.#canvas.width, this.#canvas.height);
+        for (const el2 of this.#targets) el2.style.transform = '';
+        this.#dirty = false;
+      }
+      return;
+    }
+    this.#dirty = true;
     ctx.setTransform(this.#dpr, 0, 0, this.#dpr, 0, 0);
     ctx.clearRect(0, 0, this.#w, this.#h);
 
@@ -462,6 +478,7 @@ export class Fx {
 
     // sacudida: ruido suave por trauma² + golpe inicial que se amortigua
     let tx = '';
+    let txCanvas = '';
     this.#kick.x *= Math.exp(-dt * 14);
     this.#kick.y *= Math.exp(-dt * 14);
     if (this.#trauma > 0.001 || Math.abs(this.#kick.x) + Math.abs(this.#kick.y) > 0.2) {
@@ -475,7 +492,16 @@ export class Fx {
       const y = n(b, 27) * max * s + this.#kick.y;
       const rot = n(c, 19) * 1.6 * s;
       tx = `translate(${x.toFixed(2)}px, ${y.toFixed(2)}px) rotate(${rot.toFixed(3)}deg)`;
+      // el lienzo 3D se amplía lo justo para cubrir el hueco: al moverse nunca asoma el fondo negro por un borde
+      const th = Math.abs(rot) * (Math.PI / 180);
+      const W = this.#w;
+      const H = this.#h;
+      const over = (Math.cos(th) + Math.sin(th) * Math.max(W / H, H / W)) * (1 + 2 * Math.max(Math.abs(x) / W, Math.abs(y) / H)) + 0.004;
+      txCanvas = `${tx} scale(${over.toFixed(4)})`;
     }
-    for (const el2 of this.#targets) if (el2.style.transform !== tx) el2.style.transform = tx;
+    this.#targets.forEach((el2, i) => {
+      const v = i === 0 ? txCanvas : tx;
+      if (el2.style.transform !== v) el2.style.transform = v;
+    });
   }
 }

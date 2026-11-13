@@ -9,6 +9,9 @@ import { QUALITY_ORDER } from '../config.js';
  * La parte de decisión (`tierFromSignals`) es pura y tiene pruebas.
  */
 
+/** Versión de la detección: si cambia (mejoras en las reglas), se vuelve a medir el equipo una vez. */
+export const DETECT_VERSION = 2;
+
 const rank = (tier) => QUALITY_ORDER.indexOf(tier);
 const minTier = (...tiers) => tiers.reduce((a, b) => (rank(b) < rank(a) ? b : a));
 
@@ -39,7 +42,7 @@ export function tierFromBenchmark(ms) {
  * @param {{gpu?:string, benchMs?:number, cores?:number, memory?:number, mobile?:boolean, webgl2?:boolean}} s
  */
 export function tierFromSignals(s) {
-  if (s.webgl2 === false) return 'veryLow';
+  if (s.webgl2 === false || s.software) return 'veryLow';
   const byGpu = tierFromGpu(s.gpu) ?? 'medium';
   const byBench = tierFromBenchmark(s.benchMs);
   const caps = [byGpu, byBench];
@@ -120,6 +123,7 @@ export function detectQuality() {
     mobile: /Mobi|Android|iPhone|iPad|iPod/i.test(nav.userAgent ?? '') || (nav.maxTouchPoints > 1 && /Macintosh/.test(nav.userAgent ?? '')),
     gpu: '',
     webgl2: true,
+    software: false,
     benchMs: NaN,
   };
   let gl = null;
@@ -137,6 +141,15 @@ export function detectQuality() {
     signals.webgl2 = false;
   } finally {
     gl?.getExtension('WEBGL_lose_context')?.loseContext();
+  }
+  // el navegador avisa si solo puede dar WebGL «con una penalización grave» (sin aceleración por hardware)
+  try {
+    const c2 = document.createElement('canvas');
+    const strict = c2.getContext('webgl2', { failIfMajorPerformanceCaveat: true });
+    if (!strict && signals.webgl2) signals.software = true;
+    strict?.getExtension('WEBGL_lose_context')?.loseContext();
+  } catch {
+    /* sin datos */
   }
   return { tier: tierFromSignals(signals), signals };
 }

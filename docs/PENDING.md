@@ -5,6 +5,62 @@ Fuentes: peticiones del usuario (chat) + `docs/NARRATIVE_DESIGN.md` (diseño nar
 Prioridad absoluta: **perfección, sin fallos, sin cosas feas**. Lo segundo: funcional. Entrega siempre en .zip.
 
 
+## 0.6.4 BETA — peticiones del 13-11-2026 (00:32)
+
+Hecho:
+- Sofá un 25 % más grande (era bajo al lado de los sillones); asientos, colisiones y separaciones ajustados en el
+  salón, el ala norte y el conjunto de terciopelo.
+- La luz se da en el cuadro eléctrico real de la pared: se abre su puerta, se oye el general por dentro, se encienden
+  las luces y se vuelve a cerrar (la cámara lo enseña de cerca). Piloto rojo/verde en la puerta. Fuera la palanca.
+- Puertas y rótulos de las salas pegados a la pared: el punto de colocación quedaba 18 cm por delante del muro y se
+  veía un hueco. Marcos rehechos con el forro de las jambas dentro del grosor del muro.
+- Escombros con textura: papeles impresos y bolas de papel arrugado, naipes, cascotes y polvo de yeso (antes piezas
+  blancas lisas).
+- Ya no se atraviesan: butaca volcada, taburetes tirados, maceta volcada, cubo con fregona, cubo de la gotera,
+  caballete de «suelo mojado», escalera, caja de documentos y cajas del kit de recepción (se retiran con la limpieza,
+  la reparación o al usarlas).
+- Mostrador de SERVICIOS: la colisión cubre ahora el mueble, las mamparas y la zona del empleado hasta la pared (había
+  un hueco entre el mueble y la mampara por el que se podía pasar detrás).
+
+## 0.6.3 BETA — peticiones del 12-11-2026 (21:03)
+
+Hecho:
+- RENDIMIENTO. La carga ya no bloquea la página: el casino se construye por pasos cediendo el hilo; después se
+  «calienta» (shaders compilados programa a programa o en paralelo si la GPU lo permite, texturas subidas por tandas y la
+  sonda de reflejos capturada cara a cara) antes de enseñar el menú, así el primer fotograma no se congela. Menos
+  variantes de shader (la sonda ya no obliga a compilarlo todo otra vez sin niebla ni entorno; las luces de compras ya
+  no cambian el número de luces al encenderse). Madera, suelo, pared y fieltro eran un material NUEVO en cada pieza:
+  ahora uno compartido (de ~550 a ~350 llamadas de dibujo en BAJA). Atrezo de Poly Haven y de Khronos simplificado sin
+  cambiar su aspecto (la tierra de cada maceta tenía 41 000 triángulos; las cajas de cartón 17 000), luciérnagas de
+  las macetas fuera, letras luminosas con menos vértices, personajes recortados por cámara, sombra a 30 Hz en MEDIA,
+  descompresión de modelos en hilos aparte, desenfoques de interfaz quitados en BAJA/MUY BAJA y clientes compilados en
+  segundo plano. Triángulos del menú en BAJA: de ~780 000 a ~450 000.
+- Calidad automática: detecta el equipo (GPU, núcleos, memoria, prueba de rendimiento y si el navegador avisa de que no
+  hay aceleración por hardware) y vuelve a medir una vez con las reglas nuevas. En juego y en el menú, resolución
+  dinámica: si no llega a ~50 fps baja un poco la resolución interna y la recupera cuando sobra; si ni así va fluido,
+  baja un nivel. Los cinco niveles: MUY BAJA, BAJA, MEDIA, ALTA y ULTRA.
+- Parpadeo negro en un lado de la pantalla: era la sacudida de pantalla, que movía el lienzo 3D y dejaba ver el fondo
+  negro por un borde. Ahora el lienzo se amplía lo justo mientras tiembla. Además el jugador ya no atraviesa a los
+  personajes (la cámara podía meterse en una cabeza).
+- Agua de las goteras: gota que se hincha colgando del techo, cae estirándose con estela, corona de gotitas y chorro de
+  rebote al caer; charcos con contorno irregular, borde húmedo, superficie casi espejo y ondas físicas que tuercen los
+  reflejos. En ALTA y ULTRA, reflejo plano en tiempo real de la sala.
+- Modelos nuevos hechos a mano (Blender): pilastras art déco, puertas dobles con arquitrabe y remate (2,2 m y 4 m),
+  lámparas colgantes, mostrador de servicios con mueble bar de arcos de espejo, recepción, rueda de ruleta, cubo de
+  zinc y caballete de «suelo mojado». Marcos de cuadros con moldura e ingletes de verdad, zócalo con paneles moldurados,
+  tapajuntas y rodapié con perfil. Cadena y candado en las puertas de las salas cerradas (antes un círculo rojo).
+- Cuadros: seis obras art déco distintas pintadas de antemano (metrópolis, pavo real, transatlántico, Montecarlo,
+  fuente y marina) en vez de cinco paisajes procedurales casi iguales.
+- Pantalla de carga rehecha: render de THE CLASSIC en el casino a oscuras a pantalla completa con acercamiento lento,
+  marca a la izquierda, consejo abajo, estado con ficha girando y línea de progreso fina en el borde inferior.
+- Menú principal: botones nuevos. La opción elegida crece, se dora, se enmarca entre rombos y dibuja un filete; las demás
+  se apagan; todo con una curva larga y suave.
+
+Pendiente / no verificado:
+- Sin GPU real aquí: el rendimiento se ha medido en un render por software. Las mejoras de carga están medidas; los
+  fotogramas por segundo reales en un PC modesto hay que comprobarlos en ese PC.
+- Fichas y cartas siguen siendo procedurales (sus mesas jugables están desactivadas hasta el capítulo de cartas).
+
 ## 0.6.2 BETA — peticiones del 11-11-2026 (23:43)
 
 Hecho:

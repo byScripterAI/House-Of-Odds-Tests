@@ -9,7 +9,10 @@ import { gltfLoader } from '../../gfx/gltf.js';
  * Las claves que no se sustituyen (texturas propias: placa electrónica, rejilla…) se quedan como vienen.
  * Los nodos con nombre en mayúscula son piezas que se animan (puertas, botones…).
  */
-export const MODEL_FILES = Object.freeze(['classic', 'slot', 'slot_sheet', 'stool', 'blackjack_table', 'roulette_table', 'bench', 'floor_lamp', 'pedestal', 'statue', 'pegboard']);
+export const MODEL_FILES = Object.freeze([
+  'classic', 'slot', 'slot_sheet', 'stool', 'blackjack_table', 'roulette_table', 'bench', 'floor_lamp', 'pedestal', 'statue', 'pegboard',
+  'pilaster', 'door_frame_22', 'door_leaves_22', 'door_frame_40', 'door_leaves_40', 'pendant', 'counter', 'reception', 'wheel', 'bucket', 'wetsign',
+]);
 
 const BASE = new URL('../../../assets/models/', import.meta.url).href;
 const templates = new Map();
